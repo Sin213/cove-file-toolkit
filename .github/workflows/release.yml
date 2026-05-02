@@ -37,7 +37,7 @@ jobs:
         run: npm ci
 
       - name: Build NSIS installer
-        run: npm run tauri -- build --bundles nsis
+        run: npx tauri build --bundles nsis
 
       - name: Rename and checksum
         shell: bash
