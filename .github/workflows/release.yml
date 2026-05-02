@@ -39,11 +39,20 @@ jobs:
       - name: Build NSIS installer
         run: npx tauri build --bundles nsis
 
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          set -e
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Rename and checksum
         shell: bash
         run: |
           set -e
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ steps.ver.outputs.version }}"
           SRC="src-tauri/target/release/bundle/nsis/Cove File Toolkit_${VERSION}_x64-setup.exe"
           DEST_DIR="release"
           DEST_NAME="Cove-File-Toolkit-${VERSION}-Setup.exe"
@@ -57,6 +66,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           draft: true
+          tag_name: ${{ steps.ver.outputs.tag }}
           files: |
             release/Cove-File-Toolkit-*-Setup.exe
             release/Cove-File-Toolkit-*-Setup.exe.sha256
