@@ -28,6 +28,12 @@ pub struct AppStateInner {
     pub current_index_job: Arc<RwLock<Option<String>>>,
     /// Per-root runtime status keyed by root id. Not persisted.
     pub root_runtime: Arc<RwLock<HashMap<String, IndexRootRuntime>>>,
+    /// Serializes the index worker's "validate + save_cache + publish"
+    /// critical section against `clear_cache`. Without this, a worker that
+    /// passed its active-job re-check could call `cache::save_cache` AFTER
+    /// `clear_cache` already deleted the file, leaving stale data on disk
+    /// that startup hydration would resurrect on the next launch.
+    pub publish_guard: Arc<tokio::sync::Mutex<()>>,
 }
 
 pub type AppState = Arc<AppStateInner>;
@@ -69,6 +75,7 @@ pub fn new_app_state() -> AppState {
         last_index: Arc::new(RwLock::new(last)),
         current_index_job: Arc::new(RwLock::new(None)),
         root_runtime: Arc::new(RwLock::new(runtime)),
+        publish_guard: Arc::new(tokio::sync::Mutex::new(())),
     })
 }
 

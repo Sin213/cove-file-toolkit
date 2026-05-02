@@ -200,6 +200,12 @@ export async function initScanListeners(): Promise<void> {
       indexState.jobId = null;
       indexState.status = "ready";
       indexState.error = "";
+      // Drop the in-flight progress snapshot. Without this, if status
+      // ever flips back to "indexing" before the next scan emits its
+      // first progress event, the banner would render the just-finished
+      // scan's stats instead of "Starting…", confusing the user.
+      indexState.progress = null;
+      stopIndexWatchdog();
       // Mark this job as finished so any straggler progress event with
       // the same id can't revert status back to "indexing".
       indexState.ignoredJobIds = new Set([
@@ -225,12 +231,14 @@ export async function initScanListeners(): Promise<void> {
       indexState.jobId = null;
       indexState.error = e.payload?.error || "Index error";
       indexState.status = "error";
+      indexState.progress = null;
       if (id) {
         indexState.ignoredJobIds = new Set([
           ...indexState.ignoredJobIds,
           id,
         ]);
       }
+      stopIndexWatchdog();
     }),
   );
 
@@ -304,6 +312,38 @@ export async function initScanListeners(): Promise<void> {
       diskState.status = err === "Scan cancelled" ? "cancelled" : "error";
     }),
   );
+}
+
+// ---- Index watchdog ---------------------------------------------------------
+// Defensive reconciliation: while the UI thinks a scan is running, poll the
+// backend's authoritative state on an interval. The backend's worker can
+// drop its `index.complete` emission when its job got replaced or cancelled
+// mid-flight (publish_guard re-validate fails, or the `still_active` check
+// fails). When that happens the frontend has no event to act on and would
+// otherwise be stuck on "Indexing — Starting…" until the user hits Cancel
+// or switches tabs. The watchdog calls `syncIndexScanState`, which uses the
+// same backend snapshot path that tab-switch and Cancel use, so the
+// recovered state matches those flows exactly. Auto-stops when status
+// leaves "indexing".
+let indexWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+const INDEX_WATCHDOG_INTERVAL_MS = 1500;
+
+export function startIndexWatchdog(): void {
+  if (indexWatchdogTimer) return;
+  indexWatchdogTimer = setInterval(() => {
+    if (indexState.status !== "indexing") {
+      stopIndexWatchdog();
+      return;
+    }
+    syncIndexScanState().catch(() => {});
+  }, INDEX_WATCHDOG_INTERVAL_MS);
+}
+
+export function stopIndexWatchdog(): void {
+  if (indexWatchdogTimer) {
+    clearInterval(indexWatchdogTimer);
+    indexWatchdogTimer = null;
+  }
 }
 
 // ---- Disk usage watchdog ----------------------------------------------------
@@ -486,6 +526,12 @@ export async function startIndexScan(roots: string[]): Promise<void> {
   setTimeout(() => {
     syncIndexScanState().catch(() => {});
   }, 50);
+  // Defensive watchdog: if the backend later drops its index.complete
+  // emission (replaced/cancelled job whose still_active re-check fails),
+  // the listener never fires. Without this the UI stays on "Indexing —
+  // Starting…" until the user hits Cancel or switches tabs. The watchdog
+  // self-stops the moment status leaves "indexing".
+  startIndexWatchdog();
 }
 
 export async function cancelIndexScan(): Promise<void> {
@@ -498,6 +544,8 @@ export async function cancelIndexScan(): Promise<void> {
   await cancelJob(indexState.jobId);
   indexState.jobId = null;
   indexState.status = (indexState.stats?.total ?? 0) > 0 ? "ready" : "cancelled";
+  indexState.progress = null;
+  stopIndexWatchdog();
 }
 
 /**
@@ -547,6 +595,12 @@ export async function syncIndexScanState(): Promise<void> {
       ) {
         indexState.status = "indexing";
       }
+      // We adopted (or confirmed) an active backend scan. Make sure the
+      // watchdog is running so a later dropped index.complete (replaced/
+      // cancelled job) still recovers the UI without a tab switch. The
+      // start fast-paths cover user-initiated scans; this covers reload
+      // and Search-tab activation while a scan was already in flight.
+      if (indexState.status === "indexing") startIndexWatchdog();
     }
   } else {
     // Backend has no active scan. If our UI is stuck on "indexing" but the
@@ -556,6 +610,7 @@ export async function syncIndexScanState(): Promise<void> {
       indexState.error = "";
       indexState.progress = null;
       indexState.status = s.total > 0 ? "ready" : "idle";
+      stopIndexWatchdog();
       try {
         indexState.cacheInfo = await getCacheInfo();
       } catch {
@@ -609,6 +664,8 @@ export async function startIndexAllRoots(): Promise<void> {
   setTimeout(() => {
     syncIndexScanState().catch(() => {});
   }, 50);
+  // Defensive watchdog (see startIndexScan for rationale).
+  startIndexWatchdog();
 }
 
 export async function refreshIndexRoots(): Promise<void> {
@@ -656,6 +713,42 @@ export async function tryLoadCache(): Promise<boolean> {
 }
 
 export async function refreshIndexStats(): Promise<void> {
+  try {
+    indexState.stats = await getIndexStats();
+    indexState.cacheInfo = await getCacheInfo();
+    indexState.rootViews = await getIndexRoots();
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Reset the global index state after a successful Clear Cache. Pairs with
+ * the backend `clear_cache` command which now also drops the in-memory
+ * FileIndex and last_index. Without this companion reset, Search and Disk
+ * Usage keep showing the previously-loaded entries because `idx.status`
+ * stays `ready` and `idx.stats.total` is stale until restart.
+ */
+export async function resetIndexAfterCacheClear(): Promise<void> {
+  // Anything still in flight from a prior scan must not be allowed to
+  // resurrect indexState — mark it ignored before clearing.
+  if (indexState.jobId) {
+    indexState.ignoredJobIds = new Set([
+      ...indexState.ignoredJobIds,
+      indexState.jobId,
+    ]);
+  }
+  indexState.jobId = null;
+  indexState.status = "idle";
+  indexState.error = "";
+  indexState.progress = null;
+  indexState.complete = null;
+  indexState.cacheInfo = null;
+  indexState.stats = null;
+  indexState.prevTotal = 0;
+  // Pull authoritative numbers from the backend so any view that reads
+  // stats/rootViews/cacheInfo (Settings, Search, Disk Usage status bar)
+  // sees the post-clear zero state without an app restart.
   try {
     indexState.stats = await getIndexStats();
     indexState.cacheInfo = await getCacheInfo();

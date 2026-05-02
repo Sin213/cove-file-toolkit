@@ -6,19 +6,30 @@ inspired by Everything, WizTree, and Bulk Rename Utility, in Cove style.
 
 ## Features
 
-- **Search (Everything-style)** — Multi-root indexed file search with persistent
-  cache, wildcards (`*` `?`), case-insensitive name+path matching, dense
-  results table, double-click open, right-click context menu, force rebuild,
-  status bar with live counters.
-- **Disk Usage (WizTree-style)** — Tree-style folder/file table with %-of-parent
-  bars, sortable columns, expand/collapse, breadcrumbs, side panels for file
-  types and largest files, summary metrics.
-- **Bulk Rename (BRU-style)** — 4-column rule grid (RegEx, Replace, Remove,
-  Add, Case, Numbering, Extension, Filters), live preview with old → new
-  comparison, conflict/error detection, apply locked when invalid, undo
-  preserved.
-- **Settings** — Indexed-roots manager, excluded folders, search behavior
-  (case-sensitive, match path, auto-load cache), cache info and clear.
+### Search (Everything-style)
+Multi-root indexed file search with persistent cache, wildcards (`*` `?`),
+case-insensitive name+path matching, dense results table, double-click open,
+right-click context menu, force rebuild, status bar with live counters.
+
+![Search view](docs/screenshots/01-search.png)
+
+### Disk Usage (WizTree-style)
+Tree-style folder/file table with %-of-parent bars, sortable columns,
+expand/collapse, breadcrumbs, side panels for file types and largest files,
+summary metrics, and a treemap with drill-in.
+
+![Disk Usage view](docs/screenshots/02-disk-usage.png)
+
+### Bulk Rename (BRU-style)
+8-cell rule grid (RegEx, Replace, Remove, Add, Case, Numbering, Extension,
+Filters), live preview with old → new comparison, conflict/error detection,
+apply locked when invalid, undo preserved.
+
+![Rename view](docs/screenshots/03-rename.png)
+
+### Settings
+Indexed-roots manager, excluded folders, search behavior (case-sensitive,
+match path, auto-load cache), cache info and clear.
 
 ## Prerequisites
 
@@ -43,23 +54,28 @@ npm run tauri build
 
 Build artifacts are placed in `src-tauri/target/release/bundle/`.
 
-### Artifact matrix
+### Release artifacts
 
-| Platform | Artifact | Path | Status |
-|----------|----------|------|--------|
-| Linux | AppImage | `bundle/appimage/cove-file-toolkit_0.1.0_amd64.AppImage` | Ready |
-| Linux | .deb | `bundle/deb/cove-file-toolkit_0.1.0_amd64.deb` | Ready |
-| Windows | Setup.exe (NSIS) | `bundle/nsis/Cove File Toolkit_0.1.0_x64-setup.exe` | Configured — requires Windows host |
-| Windows | Portable .exe | — | Not defined in this repo |
+Each release ships four binaries plus matching `.sha256` sidecars:
 
-> **Windows notes:** The NSIS installer target is configured but there is no cross-compilation setup (no `cargo-xwin`, no CI). Build on a Windows machine with Rust + Node.js installed. A standalone portable `.exe` is not a defined packaging path — Tauri does not produce one by default.
+| Platform | Artifact | Built by |
+|----------|----------|----------|
+| Linux | `Cove-File-Toolkit-<ver>-x86_64.AppImage` | Local Linux build (`npm run tauri build`) |
+| Linux | `Cove-File-Toolkit-<ver>-amd64.deb` | Local Linux build (`npm run tauri build`) |
+| Windows | `Cove-File-Toolkit-<ver>-Setup.exe` | GitHub Actions (`.github/workflows/release.yml` on tag push) |
+| Windows | `Cove-File-Toolkit-<ver>-Portable.exe` | Linux cross-build via `cargo-xwin` |
+
+> **Windows notes:** Both Windows artifacts require WebView2 Runtime on the
+> target machine (preinstalled on Windows 10/11). Neither is code-signed —
+> SmartScreen will prompt on first run.
 
 ### Checksums
 
-Every release binary ships with a `.sha256` sidecar:
+Every release binary ships with a `.sha256` sidecar generated via
+`sha256sum <artifact> > <artifact>.sha256`. Verify after download:
 
 ```bash
-sha256sum <artifact> > <artifact>.sha256
+sha256sum -c Cove-File-Toolkit-<ver>-<artifact>.sha256
 ```
 
 ## Runtime dependencies
@@ -69,8 +85,7 @@ sha256sum <artifact> > <artifact>.sha256
 
 ## Known limitations
 
-- No CI/CD pipeline — builds are local only
-- No Windows cross-compilation from Linux
+- No code signing — Windows SmartScreen / macOS Gatekeeper will warn
 - No auto-update integration
 - Index cache stores absolute paths — not portable across machines
 

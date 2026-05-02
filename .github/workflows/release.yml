@@ -1,0 +1,62 @@
+name: Release Windows Setup.exe
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-setup:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build NSIS installer
+        run: npm run tauri -- build --bundles nsis
+
+      - name: Rename and checksum
+        shell: bash
+        run: |
+          set -e
+          VERSION="${GITHUB_REF_NAME#v}"
+          SRC="src-tauri/target/release/bundle/nsis/Cove File Toolkit_${VERSION}_x64-setup.exe"
+          DEST_DIR="release"
+          DEST_NAME="Cove-File-Toolkit-${VERSION}-Setup.exe"
+          mkdir -p "$DEST_DIR"
+          cp "$SRC" "$DEST_DIR/$DEST_NAME"
+          cd "$DEST_DIR"
+          sha256sum "$DEST_NAME" > "$DEST_NAME.sha256"
+          ls -lh
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/Cove-File-Toolkit-*-Setup.exe
+            release/Cove-File-Toolkit-*-Setup.exe.sha256
+          fail_on_unmatched_files: true
