@@ -1,0 +1,32 @@
+[package]
+name = "cove-file-toolkit"
+version = "1.0.0"
+description = "Cove Toolkit — fast file search, disk usage, and bulk rename"
+edition = "2021"
+
+[dependencies]
+tauri = { version = "2.11.0", features = ["image-png"] }
+tauri-build = { version = "2.6.0", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+jwalk = "0.8"
+string-interner = "0.17"
+memchr = "2"
+globset = "0.4"
+regex = "1"
+dunce = "1"
+num_cpus = "1"
+uuid = { version = "1", features = ["v4", "v5"] }
+dashmap = "6"
+dirs = "5"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_Storage_FileSystem"] }
+
+[build-dependencies]
+tauri-build = { version = "2.6.0", features = [] }
