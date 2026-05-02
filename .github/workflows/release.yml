@@ -53,7 +53,7 @@ jobs:
         run: |
           set -e
           VERSION="${{ steps.ver.outputs.version }}"
-          SRC="src-tauri/target/release/bundle/nsis/Cove File Toolkit_${VERSION}_x64-setup.exe"
+          SRC="src-tauri/target/release/bundle/nsis/Cove Toolkit_${VERSION}_x64-setup.exe"
           DEST_DIR="release"
           DEST_NAME="Cove-File-Toolkit-${VERSION}-Setup.exe"
           mkdir -p "$DEST_DIR"
