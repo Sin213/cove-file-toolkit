@@ -1,4 +1,50 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
 src-tauri/target/
+
+# Local release artifacts (uploaded to GitHub Releases, not committed)
+release/
+
+# TypeScript
+*.tsbuildinfo
+
+# Local review/cache dirs
 codex-reviews/
+.codex
+
+# Editor / IDE
+.vscode/
+.idea/
+.vs/
+*.swp
+*.swo
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Local tool settings (keep team-shared settings.json if present)
+.claude/settings.local.json
+RELEASES.md
+WORKFLOW.md
+CLAUDE.md
+
+# Backup / temp
+*.bak
+*.tmp

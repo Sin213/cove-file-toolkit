@@ -192,6 +192,7 @@ async fn start_scan(
     let stats_arc = state.last_index.clone();
     let current_job_arc = state.current_index_job.clone();
     let runtime_arc = state.root_runtime.clone();
+    let publish_guard_arc = state.publish_guard.clone();
 
     tokio::task::spawn_blocking(move || {
         let walk_roots_clone = walk_roots.clone();
@@ -203,7 +204,21 @@ async fn start_scan(
                     matches!(cur.as_deref(), Some(active) if active == jid.as_str())
                 });
                 if still_active {
-                    rt.block_on(async {
+                    let published = rt.block_on(async {
+                        // Serialize against `clear_cache`. Holding
+                        // `publish_guard` across the re-validate +
+                        // `save_cache` + commit window makes the worker's
+                        // publish path mutually exclusive with Clear Cache's
+                        // cancel + delete + wipe path. Either the worker
+                        // fully wins (saves and commits, then Clear Cache
+                        // wipes both memory and disk afterward), or Clear
+                        // Cache fully wins (sets current_index_job to None
+                        // first, so this re-check fails and `save_cache` is
+                        // never called). The unsafe middle case — Clear
+                        // Cache deletes the file between our active-job
+                        // check and our save — is now impossible.
+                        let _publish_lock = publish_guard_arc.lock().await;
+
                         // Build the set of root_ids whose entries should be
                         // *replaced* by this scan — only roots that actually
                         // walked successfully. Failed/missing roots are left
@@ -218,6 +233,19 @@ async fn start_scan(
                             .collect();
 
                         let mut idx = index_arc.write().await;
+                        // Re-validate under the index lock. The outer
+                        // `still_active` read is a cheap fast-path; between
+                        // dropping it and acquiring index.write, Clear Cache
+                        // (or a replacement scan) may have swapped the slot
+                        // to None. Without this re-check, a scan that
+                        // happened to finish just as Clear Cache fired would
+                        // re-save the cache the user just wiped.
+                        {
+                            let cur = current_job_arc.read().await;
+                            if !matches!(cur.as_deref(), Some(active) if active == jid.as_str()) {
+                                return false;
+                            }
+                        }
                         let merged = crate::index::FileIndex::merge_replacing(
                             &idx,
                             new_index,
@@ -270,8 +298,16 @@ async fn start_scan(
                         if cur.as_deref() == Some(jid.as_str()) {
                             *cur = None;
                         }
+                        true
                     });
-                    let _ = app.emit("index.complete", summary);
+                    if published {
+                        let _ = app.emit("index.complete", summary);
+                    } else {
+                        eprintln!(
+                            "[index] dropped completion for replaced/cancelled job_id={}",
+                            jid
+                        );
+                    }
                 } else {
                     eprintln!(
                         "[index] dropped completion for replaced/cancelled job_id={}",
@@ -793,10 +829,11 @@ pub enum LoadCachedIndexResponse {
 pub async fn load_cached_index(
     state: State<'_, AppState>,
 ) -> Result<LoadCachedIndexResponse, String> {
-    // Authoritative guard: refuse to overwrite `state.index` while a scan is
-    // in flight. The frontend has its own gate, but on reload/HMR the
+    // Fast-path: refuse to overwrite `state.index` while a scan is in
+    // flight. The frontend has its own gate, but on reload/HMR the
     // frontend can be idle while the backend is still indexing — only the
-    // backend can answer reliably.
+    // backend can answer reliably. Authoritative re-check happens under
+    // `publish_guard` below.
     {
         let cur = state.current_index_job.read().await;
         if cur.is_some() {
@@ -816,6 +853,22 @@ pub async fn load_cached_index(
             .map(|r| r.id.clone())
             .collect()
     };
+
+    // Serialize against `clear_cache` (and the worker's publish path) for
+    // the entire cache-read + in-memory commit window. Without this,
+    // `clear_cache` could fire between our cache read and our state
+    // mutation, deleting the file and wiping memory — and we would then
+    // resurrect the just-cleared cache-derived state into memory, undoing
+    // the user's clear.
+    //
+    // Lock order: publish_guard -> current_index_job -> index -> last_index
+    // -> root_runtime. `clear_cache` and the worker publish path acquire
+    // these in the same order, so there is no acquisition cycle.
+    // `start_scan` does not take `publish_guard` (only an atomic swap of
+    // `current_index_job`), so holding it here cannot stall scan
+    // publication.
+    let _publish_lock = state.publish_guard.lock().await;
+
     let (info, index) = cache::load_cache(Some(&enabled_ids))?;
 
     // Root filter wiped every entry (cache exists but no enabled root matches
@@ -826,13 +879,13 @@ pub async fn load_cached_index(
         return Ok(LoadCachedIndexResponse::SkippedEmpty);
     }
 
-    // Precompute everything we need for the per-root runtime hydration
-    // BEFORE acquiring the `current_index_job` commit guard. The hot
-    // operation here is `Path::exists()` — on a removable/network FS it
-    // can stall for seconds, and we don't want it to hold off a concurrent
-    // `start_scan` from publishing its job id. Settings is read once and
-    // dropped; the cached-by-id lookup is built off `info`; reachability
-    // is checked here, off the guard.
+    // Precompute per-root runtime hydration BEFORE acquiring the
+    // `current_index_job` commit guard. `Path::exists` is a filesystem
+    // probe that can stall for seconds on removable/network FS; keeping
+    // it outside the commit guard preserves the original "don't block
+    // start_scan publication on a slow probe" behavior. We're still under
+    // `publish_guard`, which only blocks `clear_cache` and the worker —
+    // `start_scan` is unaffected.
     let now = info.timestamp;
     let cached_by_id: std::collections::HashMap<String, u64> = info
         .root_meta
@@ -865,13 +918,8 @@ pub async fn load_cached_index(
     // Atomic commit: hold `current_index_job` write across the re-check
     // and every state mutation below so a concurrent `start_scan` cannot
     // record a new job between our check and `*idx = index`. The guarded
-    // section is now strictly fast in-memory work — every disk/IO probe
-    // has already happened above, so this hold is short.
-    //
-    // Lock order: current_index_job -> index -> last_index -> root_runtime.
-    // `start_scan` acquires only `current_index_job` (one short atomic
-    // swap) before its own background work. There is no acquisition cycle
-    // and no deadlock.
+    // section is strictly fast in-memory work — every disk/IO probe has
+    // already happened above, so this hold is short.
     let cur_guard = state.current_index_job.write().await;
     if cur_guard.is_some() {
         return Ok(LoadCachedIndexResponse::SkippedIndexing);
@@ -903,12 +951,51 @@ pub async fn load_cached_index(
         }
     }
     drop(cur_guard);
+    drop(_publish_lock);
     Ok(LoadCachedIndexResponse::Loaded { info })
 }
 
 #[command]
 pub async fn clear_cache(state: State<'_, AppState>) -> Result<(), String> {
+    // Serialize against the worker's publish/save critical section. Without
+    // this, a worker that already passed its `still_active` re-check could
+    // call `cache::save_cache` AFTER we delete the cache file below, leaving
+    // stale data on disk that startup hydration would resurrect on the next
+    // launch. Holding `publish_guard` for the whole wipe (cancel job +
+    // delete file + clear in-memory) makes the two paths mutually exclusive.
+    let _publish_lock = state.publish_guard.lock().await;
+
+    // Cancel any in-flight indexing FIRST. Without this, a scan that's
+    // about to finish would later see itself as the active job, save a
+    // freshly merged index back to disk, and overwrite the runtime
+    // FileIndex — silently resurrecting the data the user just cleared.
+    // Take the active slot to None so the worker's `still_active` check
+    // (re-validated under `index.write` below) fails, and cancel the
+    // CancellationToken so anything still walking exits early.
+    //
+    // Lock order: publish_guard -> current_index_job -> index -> last_index
+    // -> root_runtime. The worker takes publish_guard before any of the
+    // other locks too, so there is no acquisition cycle.
+    let cancelled = {
+        let mut g = state.current_index_job.write().await;
+        g.take()
+    };
+    if let Some(prev) = &cancelled {
+        state.jobs.cancel(prev);
+    }
     cache::clear_cache()?;
+    // Drop the in-memory index too. Without this, Search/Disk Usage keep
+    // serving the previously-loaded entries until restart even though the
+    // on-disk cache is gone — the persistence is wiped but the runtime
+    // copy lives on, and the two views disagree.
+    {
+        let mut idx = state.index.write().await;
+        *idx = crate::index::FileIndex::default();
+    }
+    {
+        let mut last = state.last_index.write().await;
+        *last = None;
+    }
     let mut runtime = state.root_runtime.write().await;
     for entry in runtime.values_mut() {
         entry.state = RootState::Idle;

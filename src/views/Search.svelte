@@ -265,10 +265,30 @@
   }
 
   async function handleStartScan() {
-    const enabled = (settings?.indexed_roots ?? []).filter((r) => r.enabled);
-    if (enabled.length === 0) {
-      // Friendly first-boot fallback: index home if user has no enabled roots.
-      const home = settings?.default_root || "/home";
+    const configured = settings?.indexed_roots ?? [];
+    const enabled = configured.filter((r) => r.enabled);
+    // Validate BEFORE flipping into "indexing" so the UI can never get
+    // stuck on the "Starting…" banner waiting for a job that the backend
+    // will reject (or that we shouldn't even be sending). Existing loaded
+    // cache/index is left untouched because we never enter the scan path.
+    if (configured.length > 0 && enabled.length === 0) {
+      idx.status = "error";
+      idx.error =
+        "All indexed locations are disabled. Enable at least one in Locations or Settings before indexing.";
+      return;
+    }
+    if (configured.length === 0) {
+      // First-boot fallback: index $HOME so the user gets a working search
+      // without a Settings detour. Only kicks in when nothing is configured
+      // — we no longer silently fall back when the user has explicitly
+      // configured roots and disabled them.
+      const home = (settings?.default_root || "/home").trim();
+      if (!home) {
+        idx.status = "error";
+        idx.error =
+          "Select at least one folder to index — open Settings to add an indexed location.";
+        return;
+      }
       await startIndexScan([home]);
     } else {
       await startIndexAllRoots();
@@ -428,13 +448,25 @@
 
   // When status transitions to "ready" (e.g. scan finished while we were on
   // another tab) re-run the search and tell App to refresh cache info.
+  // When status transitions to "idle" with no index loaded (e.g. Clear
+  // Cache), drop component-local results/selection so we don't keep
+  // rendering stale rows over a wiped index — and so the next "ready"
+  // (after a rebuild) actually re-runs the search instead of being
+  // suppressed by the stale results.length check below.
   $effect(() => {
     const cur = idx.status;
     if (lastSeenStatus !== cur) {
+      const prev = lastSeenStatus;
       lastSeenStatus = cur;
       if (cur === "ready") {
         onCacheChange();
         if (results.length === 0) doSearch();
+      } else if (cur === "idle" && prev !== "idle") {
+        results = [];
+        totalResults = 0;
+        currentPage = 0;
+        activeIndex = -1;
+        clearSelection();
       }
     }
   });

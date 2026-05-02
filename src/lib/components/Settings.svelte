@@ -10,6 +10,7 @@
     type AppSettings,
     type CacheInfo,
   } from "../ipc";
+  import { resetIndexAfterCacheClear } from "../scanStore.svelte";
 
   interface Props {
     onClose: () => void;
@@ -97,6 +98,10 @@
       cacheInfo = null;
       success = "Cache cleared.";
       setTimeout(() => (success = ""), 1800);
+      // Backend now also drops the in-memory index. Sync the global scan
+      // store so Search/Disk Usage immediately switch to the unloaded
+      // state instead of continuing to render stale results until restart.
+      await resetIndexAfterCacheClear();
     } catch (e) {
       error = `Clear cache failed: ${e}`;
     }
