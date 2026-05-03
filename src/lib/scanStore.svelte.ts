@@ -10,6 +10,7 @@ import {
   getIndexStats,
   getIndexScanState,
   getDiskUsage,
+  rescanDiskDir,
   getDiskUsageScanState,
   getCacheInfo,
   type ScanProgress,
@@ -876,6 +877,43 @@ export async function toggleExpandDisk(entry: DiskUsageEntry): Promise<void> {
 
 export function setDiskSelected(path: string | null): void {
   diskState.selectedPath = path;
+}
+
+function isDescendantPath(child: string, parent: string): boolean {
+  if (child === parent) return false;
+  const sep = parent.includes("\\") && !parent.includes("/") ? "\\" : "/";
+  const base = parent.endsWith(sep) ? parent : parent + sep;
+  return child.startsWith(base);
+}
+
+export async function refreshDiskDir(dirPath: string): Promise<void> {
+  if (!diskState.rootInfo) return;
+  const rootPath = diskState.rootInfo.path;
+  try {
+    const info = await rescanDiskDir(dirPath);
+    diskState.childCache = { ...diskState.childCache, [dirPath]: info.children };
+    if (dirPath === rootPath) {
+      // Affected dir IS the current view — replace rootInfo so summary,
+      // treemap, and side panels (extensions / largest_files) reflect the
+      // new state.
+      diskState.rootInfo = info;
+    } else if (isDescendantPath(dirPath, rootPath)) {
+      // Affected dir is below the current view — also rescan the visible
+      // root so totals/extensions/treemap stay accurate.
+      try {
+        const rootInfo = await rescanDiskDir(rootPath);
+        diskState.rootInfo = rootInfo;
+        diskState.childCache = {
+          ...diskState.childCache,
+          [rootPath]: rootInfo.children,
+        };
+      } catch {
+        /* root rescan failed — keep stale rootInfo, table is still current */
+      }
+    }
+  } catch {
+    /* directory may have been removed */
+  }
 }
 
 // breadcrumbs helper

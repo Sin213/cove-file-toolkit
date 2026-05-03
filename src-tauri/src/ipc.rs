@@ -1143,6 +1143,186 @@ fn spawn_open(target: &str) -> Result<(), String> {
     }
 }
 
+/// Re-walk a single directory subtree from the live filesystem and return the
+/// same DiskUsageInfo shape as the initial scan — recursive sizes, extensions,
+/// and largest_files included. Used after mutations (copy/move/trash/rename)
+/// so the table, treemap, and side panels can refresh without a full rescan.
+#[command]
+pub async fn rescan_disk_dir(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<DiskUsageInfo, String> {
+    use tokio_util::sync::CancellationToken;
+    let dir = Path::new(&path);
+    if !dir.is_dir() {
+        return Err(format!("Not a directory: {}", path));
+    }
+    let excluded = state.settings.read().await.excluded_patterns.clone();
+    let path_owned = path.clone();
+    let tree = tokio::task::spawn_blocking(move || {
+        let token = CancellationToken::new();
+        diskusage::scan_disk_usage_inner(&path_owned, token, &excluded, |_| {})
+            .map(|(tree, _, _)| tree)
+    })
+    .await
+    .map_err(|e| format!("Rescan task failed: {e}"))??;
+    tree.get_info(&path)
+        .ok_or_else(|| format!("Path not found after rescan: {path}"))
+}
+
+// ---------- File operations (Disk Usage context menu) ----------
+
+#[command]
+pub async fn move_to_trash(paths: Vec<String>) -> Result<(), String> {
+    for p in &paths {
+        trash::delete(p).map_err(|e| format!("Trash failed for '{}': {}", p, e))?;
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn rename_path(from: String, to: String) -> Result<(), String> {
+    let dest = Path::new(&to);
+    if dest.exists() {
+        return Err(format!("Destination already exists: {}", to));
+    }
+    std::fs::rename(&from, &to).map_err(|e| format!("Rename failed: {}", e))
+}
+
+#[command]
+pub async fn copy_paths(srcs: Vec<String>, dest_dir: String) -> Result<(), String> {
+    let dest = Path::new(&dest_dir);
+    if !dest.is_dir() {
+        return Err(format!("Destination is not a directory: {}", dest_dir));
+    }
+    for src in &srcs {
+        let src_path = Path::new(src);
+        let name = src_path
+            .file_name()
+            .ok_or_else(|| format!("Cannot determine filename for '{}'", src))?;
+        let mut target = dest.join(name);
+        target = resolve_collision(target);
+        if src_path.is_dir() {
+            copy_dir_recursive(src_path, &target)?;
+        } else {
+            std::fs::copy(src_path, &target)
+                .map_err(|e| format!("Copy failed for '{}': {}", src, e))?;
+        }
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn move_paths(srcs: Vec<String>, dest_dir: String) -> Result<(), String> {
+    let dest = Path::new(&dest_dir);
+    if !dest.is_dir() {
+        return Err(format!("Destination is not a directory: {}", dest_dir));
+    }
+    let dest_canon = dunce::canonicalize(dest).ok();
+    for src in &srcs {
+        let src_path = Path::new(src);
+        let name = src_path
+            .file_name()
+            .ok_or_else(|| format!("Cannot determine filename for '{}'", src))?;
+        // Same-folder move is a no-op. Without this, the would-be target
+        // already exists (it's the source itself), resolve_collision picks
+        // "name (copy).ext", and the rename silently changes the filename.
+        let src_parent_canon = src_path.parent().and_then(|p| dunce::canonicalize(p).ok());
+        if dest_canon.is_some() && src_parent_canon == dest_canon {
+            continue;
+        }
+        let mut target = dest.join(name);
+        target = resolve_collision(target);
+        match std::fs::rename(src_path, &target) {
+            Ok(()) => {}
+            Err(e) if is_cross_device(&e) => {
+                if src_path.is_dir() {
+                    copy_dir_recursive(src_path, &target)?;
+                    std::fs::remove_dir_all(src_path)
+                        .map_err(|e| format!("Remove after cross-device copy failed: {}", e))?;
+                } else {
+                    std::fs::copy(src_path, &target)
+                        .map_err(|e| format!("Cross-device copy failed: {}", e))?;
+                    std::fs::remove_file(src_path)
+                        .map_err(|e| format!("Remove after cross-device copy failed: {}", e))?;
+                }
+            }
+            Err(e) => return Err(format!("Move failed for '{}': {}", src, e)),
+        }
+    }
+    Ok(())
+}
+
+fn is_cross_device(e: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    { e.raw_os_error() == Some(libc::EXDEV) }
+    #[cfg(windows)]
+    { e.raw_os_error() == Some(17) } // ERROR_NOT_SAME_DEVICE
+    #[cfg(not(any(unix, windows)))]
+    { false }
+}
+
+fn resolve_collision(mut target: std::path::PathBuf) -> std::path::PathBuf {
+    if !target.exists() {
+        return target;
+    }
+    let stem = target
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let ext = target
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    let parent = target.parent().unwrap().to_path_buf();
+    let first = parent.join(format!("{} (copy){}", stem, ext));
+    if !first.exists() {
+        return first;
+    }
+    for i in 2..1000 {
+        let candidate = parent.join(format!("{} (copy {}){}", stem, i, ext));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    target.set_file_name(format!("{}_dup{}", stem, ext));
+    target
+}
+
+fn check_not_descendant(src: &Path, dst: &Path) -> Result<(), String> {
+    let src_canon = dunce::canonicalize(src)
+        .unwrap_or_else(|_| src.to_path_buf());
+    let dst_canon = dunce::canonicalize(dst.parent().unwrap_or(dst))
+        .unwrap_or_else(|_| dst.to_path_buf());
+    if dst_canon.starts_with(&src_canon) {
+        return Err(format!(
+            "Cannot copy '{}' into itself or a subdirectory of itself",
+            src.display()
+        ));
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    check_not_descendant(src, dst)?;
+    std::fs::create_dir_all(dst)
+        .map_err(|e| format!("Cannot create dir '{}': {}", dst.display(), e))?;
+    for entry in std::fs::read_dir(src)
+        .map_err(|e| format!("Cannot read dir '{}': {}", src.display(), e))?
+    {
+        let entry = entry.map_err(|e| format!("Dir entry error: {}", e))?;
+        let target = dst.join(entry.file_name());
+        if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)
+                .map_err(|e| format!("Copy failed: {}", e))?;
+        }
+    }
+    Ok(())
+}
+
 // keep IndexRootRuntime referenced so the public type is exported.
 #[allow(dead_code)]
 fn _phantom(_x: IndexRootRuntime) {}

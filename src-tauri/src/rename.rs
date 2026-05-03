@@ -50,6 +50,8 @@ pub enum RenameRule {
     ExtChange { new_ext: String },
     #[serde(rename = "ext_case")]
     ExtCase { mode: String },
+    #[serde(rename = "remove_ends")]
+    RemoveEnds { first: u32, last: u32 },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -197,6 +199,17 @@ fn apply_rule(name: &str, rule: &RenameRule, index: usize) -> Result<String, Str
             } else {
                 Ok(format!("{}.{}", stem, new_ext))
             }
+        }
+        RenameRule::RemoveEnds { first, last } => {
+            let chars: Vec<char> = stem.chars().collect();
+            let len = chars.len() as i32;
+            let start = *first as i32;
+            let end = (len - *last as i32).max(start);
+            if start >= len || start >= end {
+                return Ok(name.to_string());
+            }
+            let new_stem: String = chars[start as usize..end as usize].iter().collect();
+            Ok(format!("{}{}", new_stem, ext))
         }
     }
 }
@@ -1672,6 +1685,30 @@ mod tests {
             "reserved dir must use the cove rename prefix"
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_ends_trims_both_sides() {
+        let rule = RenameRule::RemoveEnds { first: 6, last: 6 };
+        assert_eq!(apply_rule("prefix_name_suffix.txt", &rule, 0).unwrap(), "_name_.txt");
+    }
+
+    #[test]
+    fn remove_ends_first_only() {
+        let rule = RenameRule::RemoveEnds { first: 3, last: 0 };
+        assert_eq!(apply_rule("abcHello.txt", &rule, 0).unwrap(), "Hello.txt");
+    }
+
+    #[test]
+    fn remove_ends_last_only() {
+        let rule = RenameRule::RemoveEnds { first: 0, last: 4 };
+        assert_eq!(apply_rule("Hello_end.txt", &rule, 0).unwrap(), "Hello.txt");
+    }
+
+    #[test]
+    fn remove_ends_exceeds_length_returns_original() {
+        let rule = RenameRule::RemoveEnds { first: 50, last: 50 };
+        assert_eq!(apply_rule("short.txt", &rule, 0).unwrap(), "short.txt");
     }
 
     #[test]

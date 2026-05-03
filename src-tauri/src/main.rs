@@ -59,6 +59,11 @@ fn main() {
             ipc::clear_cache,
             ipc::open_path,
             ipc::reveal_in_folder,
+            ipc::rescan_disk_dir,
+            ipc::move_to_trash,
+            ipc::rename_path,
+            ipc::copy_paths,
+            ipc::move_paths,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

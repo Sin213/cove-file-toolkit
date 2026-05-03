@@ -6,6 +6,12 @@
     type RenameRule,
     type RenamePreviewItem,
   } from "../lib/ipc";
+  import {
+    isRenameChecked,
+    toggleRenameChecked,
+    setAllRenameChecked,
+    setRenameFiles,
+  } from "../lib/selection.svelte";
 
   interface Props {
     files: Array<{ name: string; path: string }>;
@@ -17,6 +23,7 @@
   let queue = $state<Array<{ name: string; path: string }>>([]);
   $effect(() => {
     queue = [...files];
+    setRenameFiles(files);
   });
 
   // ----- Rule states -----
@@ -34,6 +41,10 @@
   // Remove range (chars 1..n)
   let removeStart = $state("");
   let removeEnd = $state("");
+
+  // Trim Ends
+  let trimFirst = $state(0);
+  let trimLast = $state(0);
 
   // Add (prefix/suffix)
   let prefixText = $state("");
@@ -79,6 +90,7 @@
     const rs = parseInt(removeStart, 10);
     const re = parseInt(removeEnd, 10);
     if (!isNaN(rs) && !isNaN(re)) r.push({ type: "remove_range", start: rs, end: re });
+    if (trimFirst > 0 || trimLast > 0) r.push({ type: "remove_ends", first: trimFirst, last: trimLast });
     if (prefixText) r.push({ type: "prefix", text: prefixText });
     if (suffixText) r.push({ type: "suffix", text: suffixText });
     if (caseMode) r.push({ type: "case_change", mode: caseMode });
@@ -96,7 +108,7 @@
     return r;
   });
 
-  let activeQueue = $derived.by(() => {
+  let visibleQueue = $derived.by(() => {
     return queue.filter((q) => {
       if (filterContains && !q.name.toLowerCase().includes(filterContains.toLowerCase()))
         return false;
@@ -111,6 +123,13 @@
       return true;
     });
   });
+
+  let activeQueue = $derived.by(() => {
+    return visibleQueue.filter((q) => isRenameChecked(q.path));
+  });
+
+  let allChecked = $derived(queue.length > 0 && queue.every((q) => isRenameChecked(q.path)));
+  let noneChecked = $derived(queue.length === 0 || queue.every((q) => !isRenameChecked(q.path)));
 
   let okCount = $derived(previews.filter((p) => p.status === "ok").length);
   let errCount = $derived(
@@ -176,6 +195,7 @@
     replaceFrom = ""; replaceTo = ""; replaceCS = false; replaceStem = true;
     removeText = ""; removeCS = false; removeStem = true;
     removeStart = ""; removeEnd = "";
+    trimFirst = 0; trimLast = 0;
     prefixText = ""; suffixText = "";
     caseMode = ""; extCaseMode = "";
     numMode = ""; numStart = 1; numStep = 1; numPad = 3; numSep = "_";
@@ -186,6 +206,7 @@
   function clearQueue() {
     queue = [];
     previews = [];
+    setAllRenameChecked(false);
   }
 
   function removeFromQueue(path: string) {
@@ -306,6 +327,24 @@
           <label class="inl"
             ><span>to</span
             ><input type="number" bind:value={removeEnd} min="-100" max="100" /></label
+          >
+        </div>
+        <span class="range-hint">Negative values count from end. Range is [start, end) — end index is exclusive.</span>
+      </section>
+
+      <!-- Trim Ends -->
+      <section class="panel" class:on={trimFirst > 0 || trimLast > 0}>
+        <header class="ph">
+          <span class="title">Trim Ends</span>
+        </header>
+        <div class="row split">
+          <label class="inl"
+            ><span>First N</span
+            ><input type="number" bind:value={trimFirst} min="0" /></label
+          >
+          <label class="inl"
+            ><span>Last N</span
+            ><input type="number" bind:value={trimLast} min="0" /></label
           >
         </div>
       </section>
@@ -432,8 +471,8 @@
     <div class="action-bar">
       <span class="qstat">
         <span class="strong">{activeQueue.length}</span> in queue
-        {#if queue.length !== activeQueue.length}
-          <span class="muted">({queue.length - activeQueue.length} hidden)</span>
+        {#if queue.length !== visibleQueue.length || visibleQueue.length !== activeQueue.length}
+          <span class="muted">({queue.length - activeQueue.length} excluded)</span>
         {/if}
         <span class="sep">|</span>
         <span class="ok">{okCount} ready</span>
@@ -462,14 +501,23 @@
     <div class="preview-wrap">
       <table class="prev">
         <colgroup>
+          <col style="width: 28px" />
           <col style="width: 32px" />
-          <col style="width: 36%" />
-          <col style="width: 36%" />
+          <col style="width: 34%" />
+          <col style="width: 34%" />
           <col style="width: 18%" />
           <col style="width: 8%" />
         </colgroup>
         <thead>
           <tr>
+            <th class="chk-col">
+              <input
+                type="checkbox"
+                checked={allChecked}
+                indeterminate={!allChecked && !noneChecked}
+                onchange={() => setAllRenameChecked(!allChecked)}
+              />
+            </th>
             <th></th>
             <th>Original Name</th>
             <th>New Name</th>
@@ -478,14 +526,23 @@
           </tr>
         </thead>
         <tbody>
-          {#each activeQueue as q (q.path)}
-            {@const p = previewFor(q.path)}
+          {#each visibleQueue as q (q.path)}
+            {@const checked = isRenameChecked(q.path)}
+            {@const p = checked ? previewFor(q.path) : undefined}
             {@const status = p?.status ?? "—"}
             <tr
               class:row-ok={status === "ok"}
               class:row-bad={status === "error" || status === "conflict"}
               class:row-skip={status === "unchanged"}
+              class:row-unchecked={!checked}
             >
+              <td class="chk-col">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onchange={() => toggleRenameChecked(q.path)}
+                />
+              </td>
               <td class="num">
                 <span class="dot dot-{status}" title={status}></span>
               </td>
@@ -890,5 +947,22 @@
   .rm:hover {
     color: var(--danger);
     background: rgba(248, 81, 73, 0.12);
+  }
+
+  .chk-col {
+    text-align: center;
+    width: 28px;
+  }
+  .chk-col input[type="checkbox"] {
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  tr.row-unchecked td {
+    color: var(--text-faint);
+  }
+
+  .range-hint {
+    color: var(--text-faint);
+    font-size: 11px;
   }
 </style>
