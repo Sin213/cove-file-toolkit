@@ -8,8 +8,14 @@
     formatSize,
     formatDate,
     formatElapsed,
+    moveToTrash,
+    renamePath,
+    copyPaths,
+    movePaths,
     type DiskUsageEntry,
   } from "../lib/ipc";
+  import { setClipboard, clearClipboard, getClipboard, hasClipboard } from "../lib/clipboard.svelte";
+  import ConfirmDialog from "../lib/components/ConfirmDialog.svelte";
   import {
     getDiskState,
     startDiskScan,
@@ -22,6 +28,7 @@
     navigateDiskTo,
     etaText,
     syncDiskScanState,
+    refreshDiskDir,
   } from "../lib/scanStore.svelte";
 
   interface Props {
@@ -50,6 +57,9 @@
   let ctxMenu = $state<
     { x: number; y: number; path: string; isDir: boolean } | null
   >(null);
+
+  let confirmDialog = $state<{ title: string; message: string; confirmLabel: string; danger: boolean; onConfirm: () => void } | null>(null);
+  let renameModal = $state<{ path: string; currentName: string; newName: string; error: string } | null>(null);
 
   // Multi-select state for the table. Mirrors the Search view so users get
   // the same Ctrl/Cmd-click + Shift-click + checkbox UX in both places, and
@@ -228,14 +238,90 @@
     return lf ?? null;
   }
 
+  function getOperationPaths(path: string): string[] {
+    if (selectedPaths.size > 1 && selectedPaths.has(path)) return [...selectedPaths];
+    return [path];
+  }
+
+  function parentDir(p: string): string {
+    const idx = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+    return idx > 0 ? p.slice(0, idx) : p;
+  }
+
+  async function handlePaste(targetPath: string, targetIsDir: boolean) {
+    const cb = getClipboard();
+    if (!cb.mode) return;
+    const destDir = targetIsDir ? targetPath : parentDir(targetPath);
+    // Compute affected dirs BEFORE the operation so partial failures still
+    // refresh the dirs whose contents may have changed.
+    const dirsToRefresh = new Set<string>([destDir]);
+    if (cb.mode === "cut") {
+      for (const p of cb.paths) dirsToRefresh.add(parentDir(p));
+    }
+    try {
+      if (cb.mode === "copy") {
+        await copyPaths(cb.paths, destDir);
+      } else {
+        await movePaths(cb.paths, destDir);
+        clearClipboard();
+      }
+    } catch (e) {
+      confirmDialog = { title: "Error", message: String(e), confirmLabel: "OK", danger: false, onConfirm: () => { confirmDialog = null; } };
+    } finally {
+      for (const d of dirsToRefresh) await refreshDiskDir(d);
+    }
+  }
+
+  function handleRenameStart(path: string) {
+    const name = path.split(/[/\\]/).pop() || "";
+    renameModal = { path, currentName: name, newName: name, error: "" };
+  }
+
+  async function handleRenameConfirm() {
+    if (!renameModal) return;
+    const { path, currentName, newName } = renameModal;
+    if (!newName || newName === "." || newName === ".." || newName.includes("/") || newName.includes("\\")) {
+      renameModal = { path, currentName, newName, error: "Invalid name: must be a simple filename without path separators." };
+      return;
+    }
+    const dir = parentDir(path);
+    const newPath = dir + "/" + newName;
+    try {
+      await renamePath(path, newPath);
+      renameModal = null;
+      await refreshDiskDir(dir);
+    } catch (e) {
+      renameModal = { path, currentName, newName, error: String(e) };
+    }
+  }
+
+  async function handleTrash(paths: string[]) {
+    const count = paths.length;
+    confirmDialog = {
+      title: "Move to Trash",
+      message: `Move ${count} item${count > 1 ? "s" : ""} to system trash?`,
+      confirmLabel: "Move to Trash",
+      danger: true,
+      onConfirm: async () => {
+        confirmDialog = null;
+        const dirs = new Set(paths.map(parentDir));
+        try {
+          await moveToTrash(paths);
+        } catch (e) {
+          confirmDialog = { title: "Error", message: String(e), confirmLabel: "OK", danger: false, onConfirm: () => { confirmDialog = null; } };
+        } finally {
+          for (const d of dirs) await refreshDiskDir(d);
+        }
+      },
+    };
+  }
+
   function ctxItems() {
     if (!ctxMenu) return [];
     const isDir = ctxMenu.isDir;
     const path = ctxMenu.path;
-    // If the right-clicked row is part of an existing multi-row selection,
-    // the primary "send" action operates on the whole selection. Mirrors the
-    // Search view so the gesture is identical across both tables.
     const multi = selectedPaths.size > 1 && selectedPaths.has(path);
+    const opPaths = getOperationPaths(path);
     return [
       ...(isDir
         ? [
@@ -261,7 +347,27 @@
         label: "Copy path",
         action: () => navigator.clipboard?.writeText(path).catch(() => {}),
       },
+      {
+        label: multi ? `Copy ${opPaths.length} items` : "Copy",
+        action: () => setClipboard(opPaths, "copy"),
+      },
+      {
+        label: multi ? `Cut ${opPaths.length} items` : "Cut",
+        action: () => setClipboard(opPaths, "cut"),
+      },
+      ...(hasClipboard()
+        ? [
+            {
+              label: "Paste",
+              action: () => handlePaste(path, isDir),
+            },
+          ]
+        : []),
       { separator: true } as any,
+      {
+        label: "Rename…",
+        action: () => handleRenameStart(path),
+      },
       multi
         ? {
             label: `Send ${selectedPaths.size} selected to Rename`,
@@ -274,6 +380,12 @@
               if (entry) sendToRename([{ name: entry.name, path: entry.path }]);
             },
           },
+      { separator: true } as any,
+      {
+        label: multi ? `Move ${opPaths.length} items to Trash` : "Move to Trash",
+        danger: true,
+        action: () => handleTrash(opPaths),
+      },
     ];
   }
 
@@ -853,6 +965,39 @@
     items={ctxItems()}
     onClose={() => (ctxMenu = null)}
   />
+{/if}
+
+{#if confirmDialog}
+  <ConfirmDialog
+    title={confirmDialog.title}
+    message={confirmDialog.message}
+    confirmLabel={confirmDialog.confirmLabel}
+    danger={confirmDialog.danger}
+    onConfirm={confirmDialog.onConfirm}
+    onCancel={() => (confirmDialog = null)}
+  />
+{/if}
+
+{#if renameModal}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="overlay" onclick={() => (renameModal = null)} role="presentation">
+    <div class="rename-dialog" onclick={(e) => e.stopPropagation()} role="dialog" tabindex="-1">
+      <div class="rd-title">Rename</div>
+      <input
+        class="rd-input"
+        type="text"
+        bind:value={renameModal.newName}
+        onkeydown={(e) => { if (e.key === "Enter") handleRenameConfirm(); if (e.key === "Escape") renameModal = null; }}
+      />
+      {#if renameModal.error}
+        <div class="rd-error">{renameModal.error}</div>
+      {/if}
+      <div class="rd-actions">
+        <button class="btn ghost" onclick={() => (renameModal = null)}>Cancel</button>
+        <button class="btn primary" onclick={handleRenameConfirm}>Rename</button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 <style>
@@ -1563,5 +1708,83 @@
     color: var(--text-muted);
     min-width: 16px;
     text-align: center;
+  }
+
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 300;
+  }
+  .rename-dialog {
+    background: var(--bg-2);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 16px 20px;
+    width: 340px;
+    max-width: 90vw;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  }
+  .rd-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-strong);
+    margin-bottom: 10px;
+  }
+  .rd-input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: var(--mono);
+  }
+  .rd-input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .rd-error {
+    color: var(--danger);
+    font-size: 11.5px;
+    margin-top: 6px;
+  }
+  .rd-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .rd-actions .btn {
+    height: 28px;
+    padding: 0 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid transparent;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .rd-actions .btn.ghost {
+    background: var(--bg-surface);
+    color: var(--text-muted);
+    border-color: var(--border);
+  }
+  .rd-actions .btn.ghost:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+  }
+  .rd-actions .btn.primary {
+    background: var(--accent);
+    color: #fff;
+  }
+  .rd-actions .btn.primary:hover {
+    background: var(--accent-hover);
   }
 </style>

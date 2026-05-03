@@ -316,7 +316,8 @@ export type RenameRule =
     }
   | { type: "case_change"; mode: string }
   | { type: "ext_case"; mode: string }
-  | { type: "ext_change"; new_ext: string };
+  | { type: "ext_change"; new_ext: string }
+  | { type: "remove_ends"; first: number; last: number };
 
 export interface RenamePreviewItem {
   original_path: string;
@@ -400,6 +401,26 @@ export async function loadCachedIndex(): Promise<LoadCachedIndexResponse> {
 
 export async function clearCache(): Promise<void> {
   return invoke<void>("clear_cache");
+}
+
+export async function rescanDiskDir(path: string): Promise<DiskUsageInfo> {
+  return invoke<DiskUsageInfo>("rescan_disk_dir", { path });
+}
+
+export async function moveToTrash(paths: string[]): Promise<void> {
+  return invoke<void>("move_to_trash", { paths });
+}
+
+export async function renamePath(from: string, to: string): Promise<void> {
+  return invoke<void>("rename_path", { from, to });
+}
+
+export async function copyPaths(srcs: string[], destDir: string): Promise<void> {
+  return invoke<void>("copy_paths", { srcs, destDir });
+}
+
+export async function movePaths(srcs: string[], destDir: string): Promise<void> {
+  return invoke<void>("move_paths", { srcs, destDir });
 }
 
 export async function openPath(path: string): Promise<void> {

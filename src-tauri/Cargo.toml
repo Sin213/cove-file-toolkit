@@ -21,6 +21,7 @@ num_cpus = "1"
 uuid = { version = "1", features = ["v4", "v5"] }
 dashmap = "6"
 dirs = "5"
+trash = "5"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
