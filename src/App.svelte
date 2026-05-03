@@ -2,6 +2,7 @@
   import "./app.css";
   import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { listen } from "@tauri-apps/api/event";
   import Search from "./views/Search.svelte";
   import DiskUsage from "./views/DiskUsage.svelte";
   import Rename from "./views/Rename.svelte";
@@ -43,6 +44,19 @@
   let renameFiles = $state<Array<{ name: string; path: string }>>([]);
 
   let globalShortcut = $state("");
+
+  // One-time per-session toast hint when the X button hides to tray, so the
+  // first close doesn't feel like a freeze. Shown once per app launch.
+  let trayHintVisible = $state(false);
+  let trayHintShown = false;
+  let trayHintTimer: ReturnType<typeof setTimeout> | null = null;
+  function showTrayHintOnce() {
+    if (trayHintShown) return;
+    trayHintShown = true;
+    trayHintVisible = true;
+    if (trayHintTimer) clearTimeout(trayHintTimer);
+    trayHintTimer = setTimeout(() => (trayHintVisible = false), 6000);
+  }
 
   async function winMinimize() {
     try {
@@ -282,6 +296,13 @@
     if (getDiskState().status === "scanning") startDiskWatchdog();
     // 5. Track window maximize state for the toggle icon.
     await refreshMaxState();
+    // Backend emits this when the X button is intercepted and the window is
+    // hidden to tray. Show a one-time toast so users don't think the app froze.
+    try {
+      await listen("cove://close-to-tray", () => showTrayHintOnce());
+    } catch (e) {
+      console.warn("[cove] could not subscribe to close-to-tray event:", e);
+    }
     try {
       const unlistenResize = await getCurrentWindow().onResized(() =>
         refreshMaxState(),
@@ -304,7 +325,7 @@
       <img class="brand-icon" src={coveIcon} alt="Cove" data-tauri-drag-region />
       <div class="brand-text" data-tauri-drag-region>
         <div class="brand-name" data-tauri-drag-region>Cove Toolkit</div>
-        <div class="brand-version" data-tauri-drag-region>v1.0.0</div>
+        <div class="brand-version" data-tauri-drag-region>v1.1.1</div>
       </div>
     </div>
 
@@ -450,6 +471,13 @@
       await refreshSettings();
     }}
   />
+{/if}
+
+{#if trayHintVisible}
+  <div class="tray-toast" role="status" aria-live="polite">
+    <span>Cove Toolkit is still running in the tray. Right-click the tray icon to quit, or toggle this off in Settings.</span>
+    <button class="tt-x" aria-label="Dismiss" onclick={() => (trayHintVisible = false)}>×</button>
+  </div>
 {/if}
 
 <!--
@@ -709,5 +737,38 @@
     width: 8px;
     height: 8px;
     cursor: nwse-resize;
+  }
+
+  .tray-toast {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 300;
+    max-width: 360px;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .tray-toast .tt-x {
+    background: transparent;
+    border: 0;
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 4px;
+    cursor: pointer;
+    border-radius: 3px;
+  }
+  .tray-toast .tt-x:hover {
+    color: var(--text);
+    background: var(--bg-hover);
   }
 </style>

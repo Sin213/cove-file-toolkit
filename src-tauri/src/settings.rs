@@ -77,6 +77,8 @@ pub struct Settings {
     pub match_path: bool,
     #[serde(default = "default_auto_load_cache")]
     pub auto_load_cache: bool,
+    #[serde(default = "default_close_to_tray")]
+    pub close_to_tray: bool,
 }
 
 fn default_case_sensitive() -> bool {
@@ -86,6 +88,9 @@ fn default_match_path() -> bool {
     true
 }
 fn default_auto_load_cache() -> bool {
+    true
+}
+fn default_close_to_tray() -> bool {
     true
 }
 
@@ -132,6 +137,7 @@ impl Default for Settings {
             case_sensitive: default_case_sensitive(),
             match_path: default_match_path(),
             auto_load_cache: default_auto_load_cache(),
+            close_to_tray: default_close_to_tray(),
         }
     }
 }

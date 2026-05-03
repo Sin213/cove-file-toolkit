@@ -317,7 +317,8 @@ export type RenameRule =
   | { type: "case_change"; mode: string }
   | { type: "ext_case"; mode: string }
   | { type: "ext_change"; new_ext: string }
-  | { type: "remove_ends"; first: number; last: number };
+  | { type: "remove_ends"; first: number; last: number }
+  | { type: "insert_at"; text: string; position: number };
 
 export interface RenamePreviewItem {
   original_path: string;
@@ -360,6 +361,7 @@ export interface AppSettings {
   case_sensitive: boolean;
   match_path: boolean;
   auto_load_cache: boolean;
+  close_to_tray: boolean;
 }
 
 export interface CachedRootMeta {

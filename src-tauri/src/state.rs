@@ -7,6 +7,7 @@ use crate::roots::{IndexRootRuntime, RootState};
 use crate::settings::Settings;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 
@@ -34,12 +35,23 @@ pub struct AppStateInner {
     /// `clear_cache` already deleted the file, leaving stale data on disk
     /// that startup hydration would resurrect on the next launch.
     pub publish_guard: Arc<tokio::sync::Mutex<()>>,
+    /// Mirrors `Settings::close_to_tray` for synchronous reads from
+    /// `on_window_event`, which cannot await the async settings RwLock.
+    /// Updated on startup and whenever settings are saved.
+    pub close_to_tray: Arc<AtomicBool>,
+    /// Set to `true` after the system tray icon is successfully created at
+    /// startup. The close handler must AND this with `close_to_tray` so a
+    /// failed tray init (no host on Linux, etc.) cannot hide the only
+    /// window with no way to restore it.
+    pub tray_available: Arc<AtomicBool>,
 }
 
 pub type AppState = Arc<AppStateInner>;
 
 pub fn new_app_state() -> AppState {
     let settings = crate::settings::load_settings();
+    let close_to_tray = Arc::new(AtomicBool::new(settings.close_to_tray));
+    let tray_available = Arc::new(AtomicBool::new(false));
 
     // Eager cache hydration. The frontend's autoload path is racy with
     // Search.svelte's parallel state-pull and a silent throw there leaves
@@ -76,6 +88,8 @@ pub fn new_app_state() -> AppState {
         current_index_job: Arc::new(RwLock::new(None)),
         root_runtime: Arc::new(RwLock::new(runtime)),
         publish_guard: Arc::new(tokio::sync::Mutex::new(())),
+        close_to_tray,
+        tray_available,
     })
 }
 
