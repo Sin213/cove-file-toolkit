@@ -1,4 +1,4 @@
-name: Release Windows Setup.exe
+name: Release builds
 
 on:
   push:
@@ -10,7 +10,8 @@ permissions:
   contents: write
 
 jobs:
-  windows-setup:
+  windows:
+    name: Windows (Setup.exe + Portable.exe)
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -36,7 +37,7 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
-      - name: Build NSIS installer
+      - name: Build NSIS installer (also produces raw exe for Portable)
         run: npx tauri build --bundles nsis
 
       - name: Resolve version
@@ -48,18 +49,25 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Rename and checksum
+      - name: Stage Setup.exe + Portable.exe + checksums
         shell: bash
         run: |
           set -e
           VERSION="${{ steps.ver.outputs.version }}"
-          SRC="src-tauri/target/release/bundle/nsis/Cove Toolkit_${VERSION}_x64-setup.exe"
           DEST_DIR="release"
-          DEST_NAME="Cove-File-Toolkit-${VERSION}-Setup.exe"
           mkdir -p "$DEST_DIR"
-          cp "$SRC" "$DEST_DIR/$DEST_NAME"
+          # NSIS installer (Tauri bundles using productName "Cove Toolkit")
+          SETUP_SRC="src-tauri/target/release/bundle/nsis/Cove Toolkit_${VERSION}_x64-setup.exe"
+          SETUP_DEST="$DEST_DIR/Cove-File-Toolkit-${VERSION}-Setup.exe"
+          cp "$SETUP_SRC" "$SETUP_DEST"
+          # Portable: raw release binary, no installer wrapper
+          PORTABLE_SRC="src-tauri/target/release/cove-file-toolkit.exe"
+          PORTABLE_DEST="$DEST_DIR/Cove-File-Toolkit-${VERSION}-Portable.exe"
+          cp "$PORTABLE_SRC" "$PORTABLE_DEST"
           cd "$DEST_DIR"
-          sha256sum "$DEST_NAME" > "$DEST_NAME.sha256"
+          for f in "Cove-File-Toolkit-${VERSION}-Setup.exe" "Cove-File-Toolkit-${VERSION}-Portable.exe"; do
+            sha256sum "$f" > "$f.sha256"
+          done
           ls -lh
 
       - name: Upload to release
@@ -70,4 +78,93 @@ jobs:
           files: |
             release/Cove-File-Toolkit-*-Setup.exe
             release/Cove-File-Toolkit-*-Setup.exe.sha256
+            release/Cove-File-Toolkit-*-Portable.exe
+            release/Cove-File-Toolkit-*-Portable.exe.sha256
+          fail_on_unmatched_files: true
+
+  linux:
+    name: Linux (AppImage + .deb)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build AppImage + .deb
+        run: npx tauri build --bundles appimage,deb
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          set -e
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Stage AppImage + .deb + checksums
+        shell: bash
+        run: |
+          set -e
+          VERSION="${{ steps.ver.outputs.version }}"
+          DEST_DIR="release"
+          mkdir -p "$DEST_DIR"
+          # AppImage
+          APPIMAGE_SRC=$(ls "src-tauri/target/release/bundle/appimage/"*.AppImage | head -n 1)
+          APPIMAGE_DEST="$DEST_DIR/Cove-File-Toolkit-${VERSION}-x86_64.AppImage"
+          cp "$APPIMAGE_SRC" "$APPIMAGE_DEST"
+          chmod +x "$APPIMAGE_DEST"
+          # .deb
+          DEB_SRC=$(ls "src-tauri/target/release/bundle/deb/"*.deb | head -n 1)
+          DEB_DEST="$DEST_DIR/Cove-File-Toolkit-${VERSION}-amd64.deb"
+          cp "$DEB_SRC" "$DEB_DEST"
+          cd "$DEST_DIR"
+          for f in "Cove-File-Toolkit-${VERSION}-x86_64.AppImage" "Cove-File-Toolkit-${VERSION}-amd64.deb"; do
+            sha256sum "$f" > "$f.sha256"
+          done
+          ls -lh
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ steps.ver.outputs.tag }}
+          files: |
+            release/Cove-File-Toolkit-*-x86_64.AppImage
+            release/Cove-File-Toolkit-*-x86_64.AppImage.sha256
+            release/Cove-File-Toolkit-*-amd64.deb
+            release/Cove-File-Toolkit-*-amd64.deb.sha256
           fail_on_unmatched_files: true
