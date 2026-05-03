@@ -1,4 +1,4 @@
-# Cove Toolkit v1.0.0
+# Cove Toolkit
 
 Dense desktop file utility built with Tauri 2.x, Svelte 5, and Rust. An
 all-in-one tool for filename search, disk-usage analysis, and bulk renaming —
