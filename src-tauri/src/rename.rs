@@ -52,6 +52,8 @@ pub enum RenameRule {
     ExtCase { mode: String },
     #[serde(rename = "remove_ends")]
     RemoveEnds { first: u32, last: u32 },
+    #[serde(rename = "insert_at")]
+    InsertAt { text: String, position: i32 },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -209,6 +211,31 @@ fn apply_rule(name: &str, rule: &RenameRule, index: usize) -> Result<String, Str
                 return Ok(name.to_string());
             }
             let new_stem: String = chars[start as usize..end as usize].iter().collect();
+            Ok(format!("{}{}", new_stem, ext))
+        }
+        RenameRule::InsertAt { text, position } => {
+            if text.is_empty() {
+                return Ok(name.to_string());
+            }
+            let chars: Vec<char> = stem.chars().collect();
+            let len = chars.len() as i32;
+            // Symmetric indexing: 0 = start of stem, -1 = end of stem
+            // (i.e. just before extension), -2 = before last stem char, ...
+            // Positive overflow clamps to end; negative overflow clamps to 0.
+            let mut idx = if *position < 0 {
+                len + 1 + *position
+            } else {
+                *position
+            };
+            if idx < 0 {
+                idx = 0;
+            }
+            if idx > len {
+                idx = len;
+            }
+            let mut new_stem: String = chars[..idx as usize].iter().collect();
+            new_stem.push_str(text);
+            new_stem.extend(chars[idx as usize..].iter());
             Ok(format!("{}{}", new_stem, ext))
         }
     }
@@ -1709,6 +1736,54 @@ mod tests {
     fn remove_ends_exceeds_length_returns_original() {
         let rule = RenameRule::RemoveEnds { first: 50, last: 50 };
         assert_eq!(apply_rule("short.txt", &rule, 0).unwrap(), "short.txt");
+    }
+
+    #[test]
+    fn insert_at_zero_acts_like_prefix() {
+        let rule = RenameRule::InsertAt { text: "X".to_string(), position: 0 };
+        assert_eq!(apply_rule("name.txt", &rule, 0).unwrap(), "Xname.txt");
+    }
+
+    #[test]
+    fn insert_at_negative_one_inserts_before_ext() {
+        let rule = RenameRule::InsertAt { text: "_v2".to_string(), position: -1 };
+        assert_eq!(apply_rule("name.txt", &rule, 0).unwrap(), "name_v2.txt");
+    }
+
+    #[test]
+    fn insert_at_negative_two_before_last_stem_char() {
+        let rule = RenameRule::InsertAt { text: "X".to_string(), position: -2 };
+        assert_eq!(apply_rule("abcd.txt", &rule, 0).unwrap(), "abcXd.txt");
+    }
+
+    #[test]
+    fn insert_at_stem_len_inserts_before_ext() {
+        let rule = RenameRule::InsertAt { text: "_v2".to_string(), position: 4 };
+        assert_eq!(apply_rule("name.txt", &rule, 0).unwrap(), "name_v2.txt");
+    }
+
+    #[test]
+    fn insert_at_middle() {
+        let rule = RenameRule::InsertAt { text: "MID".to_string(), position: 2 };
+        assert_eq!(apply_rule("abcd.txt", &rule, 0).unwrap(), "abMIDcd.txt");
+    }
+
+    #[test]
+    fn insert_at_oob_clamps_to_end_of_stem() {
+        let rule = RenameRule::InsertAt { text: "Z".to_string(), position: 99 };
+        assert_eq!(apply_rule("abcd.txt", &rule, 0).unwrap(), "abcdZ.txt");
+    }
+
+    #[test]
+    fn insert_at_empty_text_noop() {
+        let rule = RenameRule::InsertAt { text: "".to_string(), position: 0 };
+        assert_eq!(apply_rule("abcd.txt", &rule, 0).unwrap(), "abcd.txt");
+    }
+
+    #[test]
+    fn insert_at_no_extension() {
+        let rule = RenameRule::InsertAt { text: "_X".to_string(), position: -1 };
+        assert_eq!(apply_rule("README", &rule, 0).unwrap(), "README_X");
     }
 
     #[test]

@@ -197,6 +197,15 @@
           >
         </section>
 
+        <!-- Window behavior -->
+        <section class="section">
+          <h3>Window</h3>
+          <label class="check"
+            ><input type="checkbox" bind:checked={settings.close_to_tray} />
+            Close to tray (X button hides to system tray instead of quitting)</label
+          >
+        </section>
+
         <!-- Excluded patterns -->
         <section class="section">
           <h3>Excluded Folders</h3>

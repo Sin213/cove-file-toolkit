@@ -46,9 +46,11 @@
   let trimFirst = $state(0);
   let trimLast = $state(0);
 
-  // Add (prefix/suffix)
+  // Add (prefix/suffix/insert)
   let prefixText = $state("");
   let suffixText = $state("");
+  let insertText = $state("");
+  let insertPos = $state(0);
 
   // Case
   let caseMode = $state("");
@@ -93,6 +95,7 @@
     if (trimFirst > 0 || trimLast > 0) r.push({ type: "remove_ends", first: trimFirst, last: trimLast });
     if (prefixText) r.push({ type: "prefix", text: prefixText });
     if (suffixText) r.push({ type: "suffix", text: suffixText });
+    if (insertText) r.push({ type: "insert_at", text: insertText, position: insertPos });
     if (caseMode) r.push({ type: "case_change", mode: caseMode });
     if (extCaseMode) r.push({ type: "ext_case", mode: extCaseMode });
     if (numMode)
@@ -196,7 +199,7 @@
     removeText = ""; removeCS = false; removeStem = true;
     removeStart = ""; removeEnd = "";
     trimFirst = 0; trimLast = 0;
-    prefixText = ""; suffixText = "";
+    prefixText = ""; suffixText = ""; insertText = ""; insertPos = 0;
     caseMode = ""; extCaseMode = "";
     numMode = ""; numStart = 1; numStep = 1; numPad = 3; numSep = "_";
     extNew = "";
@@ -350,7 +353,7 @@
       </section>
 
       <!-- Add -->
-      <section class="panel" class:on={!!prefixText || !!suffixText}>
+      <section class="panel" class:on={!!prefixText || !!suffixText || !!insertText}>
         <header class="ph">
           <span class="num">4</span>
           <span class="title">Add</span>
@@ -361,6 +364,14 @@
         <div class="row">
           <input type="text" bind:value={suffixText} placeholder="Suffix" />
         </div>
+        <div class="row split">
+          <input type="text" bind:value={insertText} placeholder="Insert" />
+          <label class="inl" style="flex: 0 0 84px"
+            ><span>Pos</span
+            ><input type="number" bind:value={insertPos} min="-100" max="100" /></label
+          >
+        </div>
+        <span class="range-hint">0 = start, -1 = before extension, negatives wrap from end.</span>
       </section>
 
       <!-- Case -->

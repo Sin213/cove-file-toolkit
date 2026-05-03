@@ -803,6 +803,9 @@ pub async fn save_settings(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     crate::settings::save_settings(&settings)?;
+    state
+        .close_to_tray
+        .store(settings.close_to_tray, std::sync::atomic::Ordering::Relaxed);
     let mut current = state.settings.write().await;
     *current = settings;
     Ok(())
