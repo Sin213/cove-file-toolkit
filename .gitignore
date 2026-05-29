@@ -48,3 +48,10 @@ CLAUDE.md
 # Backup / temp
 *.bak
 *.tmp
+AGENTS.md
+.claudeignore
+
+.codex-reviews/
+
+# Session aids (orientation snapshots)
+*-orientation.md
