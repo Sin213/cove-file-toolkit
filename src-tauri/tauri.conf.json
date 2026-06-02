@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "Cove Toolkit v1.2.0",
+        "title": "Cove Toolkit",
         "width": 1320,
         "height": 820,
         "minWidth": 900,

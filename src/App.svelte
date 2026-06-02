@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { listen } from "@tauri-apps/api/event";
+  import { getVersion } from "@tauri-apps/api/app";
   import Search from "./views/Search.svelte";
   import DiskUsage from "./views/DiskUsage.svelte";
   import Rename from "./views/Rename.svelte";
@@ -40,6 +41,7 @@
   let settings = $state<AppSettings | null>(null);
   let cacheInfo = $state<CacheInfo | null>(null);
   let isMaximized = $state(false);
+  let appVersion = $state("");
 
   let renameFiles = $state<Array<{ name: string; path: string }>>([]);
 
@@ -266,6 +268,7 @@
   }
 
   onMount(async () => {
+    appVersion = await getVersion();
     // 1. Subscribe to backend events ONCE — survives tab switches.
     await initScanListeners();
     // 2. Load settings + cache info.
@@ -325,7 +328,7 @@
       <img class="brand-icon" src={coveIcon} alt="Cove" data-tauri-drag-region />
       <div class="brand-text" data-tauri-drag-region>
         <div class="brand-name" data-tauri-drag-region>Cove Toolkit</div>
-        <div class="brand-version" data-tauri-drag-region>v1.1.1</div>
+        <div class="brand-version" data-tauri-drag-region>v{appVersion}</div>
       </div>
     </div>
 
