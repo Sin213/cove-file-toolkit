@@ -1088,6 +1088,17 @@ fn spawn_open(target: &str) -> Result<(), String> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
+    // AppImage sets LD_LIBRARY_PATH, LD_PRELOAD, etc. that break child
+    // processes like xdg-open / file managers. Restore the original env
+    // so the spawned process inherits a clean environment.
+    for key in ["LD_LIBRARY_PATH", "LD_PRELOAD", "GDK_PIXBUF_MODULE_FILE",
+                "GDK_PIXBUF_MODULEDIR", "PYTHONPATH"] {
+        if let Ok(orig) = std::env::var(format!("APPIMAGE_ORIGINAL_{key}")) {
+            cmd.env(key, orig);
+        } else if std::env::var("APPIMAGE").is_ok() {
+            cmd.env_remove(key);
+        }
+    }
     cmd.spawn()
         .map(|_| ())
         .map_err(|e| format!("xdg-open failed for {target:?}: {e}"))
