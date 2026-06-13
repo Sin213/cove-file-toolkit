@@ -143,7 +143,11 @@ impl Default for Settings {
 }
 
 fn settings_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("cove-file-toolkit").join("settings.json"))
+    if crate::portable::is_portable() {
+        Some(crate::portable::portable_data_dir("cove-file-toolkit").join("settings.json"))
+    } else {
+        dirs::config_dir().map(|d| d.join("cove-file-toolkit").join("settings.json"))
+    }
 }
 
 pub fn load_settings() -> Settings {

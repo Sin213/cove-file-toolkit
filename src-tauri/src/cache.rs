@@ -55,7 +55,11 @@ struct CacheEntry {
 }
 
 fn cache_dir() -> Option<PathBuf> {
-    dirs::cache_dir().map(|d| d.join("cove-file-toolkit"))
+    if crate::portable::is_portable() {
+        Some(crate::portable::portable_data_dir("cove-file-toolkit").join("cache"))
+    } else {
+        dirs::cache_dir().map(|d| d.join("cove-file-toolkit"))
+    }
 }
 
 fn cache_data_path() -> Option<PathBuf> {

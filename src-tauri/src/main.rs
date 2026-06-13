@@ -5,6 +5,7 @@ mod diskusage;
 mod index;
 mod ipc;
 mod jobs;
+mod portable;
 mod rename;
 mod roots;
 mod search;
