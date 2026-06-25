@@ -9,6 +9,7 @@
     formatDate,
     formatElapsed,
     moveToTrash,
+    deletePermanently,
     renamePath,
     copyPaths,
     movePaths,
@@ -316,6 +317,27 @@
     };
   }
 
+  function handleDeletePermanently(paths: string[]) {
+    const count = paths.length;
+    confirmDialog = {
+      title: "Delete Permanently",
+      message: `Permanently delete ${count} item${count > 1 ? "s" : ""}? This cannot be undone.`,
+      confirmLabel: "Delete Permanently",
+      danger: true,
+      onConfirm: async () => {
+        confirmDialog = null;
+        const dirs = new Set(paths.map(parentDir));
+        try {
+          await deletePermanently(paths);
+        } catch (e) {
+          confirmDialog = { title: "Error", message: String(e), confirmLabel: "OK", danger: false, onConfirm: () => { confirmDialog = null; } };
+        } finally {
+          for (const d of dirs) await refreshDiskDir(d);
+        }
+      },
+    };
+  }
+
   function ctxItems() {
     if (!ctxMenu) return [];
     const isDir = ctxMenu.isDir;
@@ -385,6 +407,11 @@
         label: multi ? `Move ${opPaths.length} items to Trash` : "Move to Trash",
         danger: true,
         action: () => handleTrash(opPaths),
+      },
+      {
+        label: multi ? `Delete ${opPaths.length} items permanently` : "Delete permanently",
+        danger: true,
+        action: () => handleDeletePermanently(opPaths),
       },
     ];
   }
@@ -496,6 +523,18 @@
     syncDiskScanState().catch(() => {});
   });
 </script>
+
+<svelte:window onkeydown={(e) => {
+  if (e.key === "Delete" && selectedPaths.size > 0 && !renameModal && !confirmDialog) {
+    e.preventDefault();
+    const paths = [...selectedPaths];
+    if (e.shiftKey) {
+      handleDeletePermanently(paths);
+    } else {
+      handleTrash(paths);
+    }
+  }
+}} />
 
 <div class="du-view">
   <!-- Toolbar -->

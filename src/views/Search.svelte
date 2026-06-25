@@ -2,10 +2,13 @@
   import { onMount, tick } from "svelte";
   import ResultsTable from "../lib/components/ResultsTable.svelte";
   import ContextMenu from "../lib/components/ContextMenu.svelte";
+  import ConfirmDialog from "../lib/components/ConfirmDialog.svelte";
   import {
     search,
     openPath,
     revealInFolder,
+    moveToTrash,
+    deletePermanently,
     formatElapsed,
     formatDate,
     addIndexRoot,
@@ -75,6 +78,7 @@
   let searchInput: HTMLInputElement | undefined = $state();
 
   let ctxMenu = $state<{ x: number; y: number; item: FileItem } | null>(null);
+  let confirmDialog = $state<{ title: string; message: string; confirmLabel: string; danger: boolean; onConfirm: () => void } | null>(null);
 
   // Surfaces the most recent open failure to the user (file not found,
   // launcher refused, etc.) so a failed double-click is never silent.
@@ -395,6 +399,16 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    if (e.key === "Delete" && selectedPaths.size > 0 && document.activeElement !== searchInput) {
+      e.preventDefault();
+      const paths = getSelectedPaths();
+      if (e.shiftKey) {
+        handleDeletePermanently(paths);
+      } else {
+        handleTrash(paths);
+      }
+      return;
+    }
     if (e.key === "Escape") {
       if (ctxMenu) {
         ctxMenu = null;
@@ -525,6 +539,52 @@
     return ts > 0 ? formatDate(ts) : "—";
   });
 
+  function getSelectedPaths(): string[] {
+    return [...selectedPaths];
+  }
+
+  function handleTrash(paths: string[]) {
+    const count = paths.length;
+    confirmDialog = {
+      title: "Move to Trash",
+      message: `Move ${count} item${count > 1 ? "s" : ""} to system trash?`,
+      confirmLabel: "Move to Trash",
+      danger: true,
+      onConfirm: async () => {
+        confirmDialog = null;
+        try {
+          await moveToTrash(paths);
+          for (const p of paths) selectedPaths.delete(p);
+          selectedPaths = new Set(selectedPaths);
+          doSearch();
+        } catch (e) {
+          confirmDialog = { title: "Error", message: String(e), confirmLabel: "OK", danger: false, onConfirm: () => { confirmDialog = null; } };
+        }
+      },
+    };
+  }
+
+  function handleDeletePermanently(paths: string[]) {
+    const count = paths.length;
+    confirmDialog = {
+      title: "Delete Permanently",
+      message: `Permanently delete ${count} item${count > 1 ? "s" : ""}? This cannot be undone.`,
+      confirmLabel: "Delete Permanently",
+      danger: true,
+      onConfirm: async () => {
+        confirmDialog = null;
+        try {
+          await deletePermanently(paths);
+          for (const p of paths) selectedPaths.delete(p);
+          selectedPaths = new Set(selectedPaths);
+          doSearch();
+        } catch (e) {
+          confirmDialog = { title: "Error", message: String(e), confirmLabel: "OK", danger: false, onConfirm: () => { confirmDialog = null; } };
+        }
+      },
+    };
+  }
+
   function ctxItems() {
     if (!ctxMenu) return [];
     const item = ctxMenu.item;
@@ -532,6 +592,7 @@
     // existing multi-row selection, the menu's primary "send" action
     // operates on the whole selection rather than just this row.
     const multi = selectedPaths.size > 1 && selectedPaths.has(item.path);
+    const opPaths = multi ? getSelectedPaths() : [item.path];
     return [
       {
         label: item.is_dir ? "Open folder" : "Open",
@@ -560,6 +621,17 @@
             label: "Send to Rename",
             action: () => handleSendContextToRename(item),
           },
+      { separator: true } as any,
+      {
+        label: multi ? `Move ${opPaths.length} items to Trash` : "Move to Trash",
+        danger: true,
+        action: () => handleTrash(opPaths),
+      },
+      {
+        label: multi ? `Delete ${opPaths.length} items permanently` : "Delete permanently",
+        danger: true,
+        action: () => handleDeletePermanently(opPaths),
+      },
     ];
   }
 
@@ -998,6 +1070,17 @@
     y={ctxMenu.y}
     items={ctxItems()}
     onClose={() => (ctxMenu = null)}
+  />
+{/if}
+
+{#if confirmDialog}
+  <ConfirmDialog
+    title={confirmDialog.title}
+    message={confirmDialog.message}
+    confirmLabel={confirmDialog.confirmLabel}
+    danger={confirmDialog.danger}
+    onConfirm={confirmDialog.onConfirm}
+    onCancel={() => (confirmDialog = null)}
   />
 {/if}
 

@@ -159,6 +159,7 @@ fn main() {
             ipc::reveal_in_folder,
             ipc::rescan_disk_dir,
             ipc::move_to_trash,
+            ipc::delete_permanently,
             ipc::rename_path,
             ipc::copy_paths,
             ipc::move_paths,

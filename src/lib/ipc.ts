@@ -413,6 +413,10 @@ export async function moveToTrash(paths: string[]): Promise<void> {
   return invoke<void>("move_to_trash", { paths });
 }
 
+export async function deletePermanently(paths: string[]): Promise<void> {
+  return invoke<void>("delete_permanently", { paths });
+}
+
 export async function renamePath(from: string, to: string): Promise<void> {
   return invoke<void>("rename_path", { from, to });
 }

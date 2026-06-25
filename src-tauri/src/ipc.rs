@@ -1189,7 +1189,109 @@ pub async fn rescan_disk_dir(
 #[command]
 pub async fn move_to_trash(paths: Vec<String>) -> Result<(), String> {
     for p in &paths {
-        trash::delete(p).map_err(|e| format!("Trash failed for '{}': {}", p, e))?;
+        freedesktop_trash_fallback(Path::new(p))
+            .map_err(|e| format!("Trash failed for '{}': {}", p, e))?;
+    }
+    Ok(())
+}
+
+fn freedesktop_trash_fallback(path: &Path) -> Result<(), String> {
+    let trash_dir = dirs::data_dir()
+        .ok_or("Cannot determine XDG data directory")?
+        .join("Trash");
+    let files_dir = trash_dir.join("files");
+    let info_dir = trash_dir.join("info");
+    std::fs::create_dir_all(&files_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&info_dir).map_err(|e| e.to_string())?;
+
+    let name = path
+        .file_name()
+        .ok_or("No filename")?
+        .to_string_lossy()
+        .to_string();
+    let abs = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+
+    let mut dest_name = name.clone();
+    let mut counter = 1u32;
+    while files_dir.join(&dest_name).exists() {
+        let stem = Path::new(&name)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy();
+        let ext = Path::new(&name).extension().map(|e| e.to_string_lossy().to_string());
+        dest_name = match ext {
+            Some(e) => format!("{}.{}.{}", stem, counter, e),
+            None => format!("{}.{}", stem, counter),
+        };
+        counter += 1;
+    }
+
+    let deletion_date = format_trash_date();
+    let info_content = format!(
+        "[Trash Info]\nPath={}\nDeletionDate={}\n",
+        abs.display(),
+        deletion_date
+    );
+    std::fs::write(
+        info_dir.join(format!("{}.trashinfo", dest_name)),
+        info_content,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let dest = files_dir.join(&dest_name);
+    if let Err(e) = std::fs::rename(path, &dest) {
+        if e.raw_os_error() == Some(18) {
+            // EXDEV: cross-device link - copy then remove
+            if path.is_dir() {
+                copy_dir_recursive(path, &dest)?;
+                std::fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+            } else {
+                std::fs::copy(path, &dest).map_err(|e| e.to_string())?;
+                std::fs::remove_file(path).map_err(|e| e.to_string())?;
+            }
+        } else {
+            return Err(e.to_string());
+        }
+    }
+    Ok(())
+}
+
+fn format_trash_date() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = (secs / 86400) as i64;
+    let day_secs = (secs % 86400) as i64;
+    let h = day_secs / 3600;
+    let m = (day_secs % 3600) / 60;
+    let s = day_secs % 60;
+    // Civil date from unix days (algorithm from Howard Hinnant)
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}")
+}
+
+#[command]
+pub async fn delete_permanently(paths: Vec<String>) -> Result<(), String> {
+    for p in &paths {
+        let path = Path::new(p);
+        if path.is_dir() {
+            std::fs::remove_dir_all(path)
+                .map_err(|e| format!("Delete failed for '{}': {}", p, e))?;
+        } else {
+            std::fs::remove_file(path)
+                .map_err(|e| format!("Delete failed for '{}': {}", p, e))?;
+        }
     }
     Ok(())
 }
