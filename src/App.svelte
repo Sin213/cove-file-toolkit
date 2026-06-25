@@ -539,8 +539,8 @@
     height: 100%;
   }
   .brand-icon {
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
     object-fit: contain;
     image-rendering: -webkit-optimize-contrast;
     flex-shrink: 0;
