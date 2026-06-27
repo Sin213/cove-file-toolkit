@@ -40,7 +40,7 @@
 
   let {
     sendToRename,
-    defaultRoot = "/home",
+    defaultRoot = "",
     refreshSignal = false,
   }: Props = $props();
 
@@ -49,6 +49,13 @@
 
   // Local-only UI state (path input, sort, right-panel mode, context menu)
   let scanRoot = $state(ds.scanRoot || defaultRoot);
+
+  $effect(() => {
+    if (defaultRoot && !scanRoot && !ds.scanRoot) {
+      scanRoot = defaultRoot;
+    }
+  });
+
   let sortField = $state<
     "size" | "name" | "items" | "files" | "folders" | "mtime" | "pct"
   >("size");
@@ -915,7 +922,7 @@
           selectedPath={ds.selectedPath}
           onSelect={onTreemapSelect}
           onDrill={onTreemapDrill}
-          height={220}
+          height={280}
         />
       </div>
     </div>

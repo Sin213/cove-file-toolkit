@@ -60,6 +60,65 @@ fn system_time_to_epoch(t: SystemTime) -> i64 {
         .unwrap_or(0)
 }
 
+/// Cheap (size, mtime) for a directory entry.
+///
+/// On Windows, `std::fs::metadata` opens a file handle per file (via
+/// `CreateFileW`), which is intercepted by Defender real-time protection —
+/// catastrophically slow across hundreds of thousands of files. Instead we
+/// query `GetFileAttributesExW`, which reads size + last-write time WITHOUT
+/// opening the file (no handle, no AV scan). It does not follow reparse
+/// points, matching jwalk's `follow_links(false)` / symlink_metadata
+/// semantics. On the rare failure (e.g. paths over MAX_PATH without a
+/// verbatim prefix) we fall back to jwalk's `metadata()`.
+///
+/// On non-Windows this is exactly the previous behavior: jwalk's
+/// `metadata()` (an `lstat`), so Linux/macOS performance is unchanged.
+pub(crate) fn entry_size_mtime<C: jwalk::ClientState>(entry: &jwalk::DirEntry<C>) -> (u64, i64) {
+    #[cfg(windows)]
+    {
+        if let Some(v) = win_fast_meta(&entry.path()) {
+            return v;
+        }
+    }
+    entry
+        .metadata()
+        .map(|m| (m.len(), system_time_to_epoch(m.modified().unwrap_or(UNIX_EPOCH))))
+        .unwrap_or((0, 0))
+}
+
+/// Windows: read (size, mtime) via `GetFileAttributesExW` — no file handle
+/// opened. Returns `None` on failure so the caller can fall back.
+#[cfg(windows)]
+fn win_fast_meta(path: &Path) -> Option<(u64, i64)> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileAttributesExW, GetFileExInfoStandard, WIN32_FILE_ATTRIBUTE_DATA,
+    };
+
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut data: WIN32_FILE_ATTRIBUTE_DATA = unsafe { std::mem::zeroed() };
+    let ok = unsafe {
+        GetFileAttributesExW(
+            wide.as_ptr(),
+            GetFileExInfoStandard,
+            &mut data as *mut WIN32_FILE_ATTRIBUTE_DATA as *mut core::ffi::c_void,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let size = ((data.nFileSizeHigh as u64) << 32) | (data.nFileSizeLow as u64);
+    let ft = data.ftLastWriteTime;
+    let ticks = ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64);
+    // FILETIME is 100-ns ticks since 1601-01-01; Unix epoch is 11_644_473_600s later.
+    let mtime = (ticks / 10_000_000) as i64 - 11_644_473_600;
+    Some((size, mtime))
+}
+
 fn is_excluded(path: &Path, excluded: &[String]) -> bool {
     if excluded.is_empty() {
         return false;
@@ -221,10 +280,22 @@ pub fn walk_directories(
             canonical_path: cr.canonical_str.clone(),
         });
 
-        let walker = jwalk::WalkDir::new(&cr.canonical)
+        // Gather (size, mtime) into each entry's client_state during jwalk's
+        // PARALLEL read phase. The per-file metadata cost (a
+        // `GetFileAttributesExW` on Windows) then runs spread across worker
+        // threads instead of serially in the consumer loop below — that serial
+        // cost was the bulk of Windows scan time.
+        let walker = jwalk::WalkDirGeneric::<((), (u64, i64))>::new(&cr.canonical)
             .parallelism(jwalk::Parallelism::RayonNewPool(parallelism))
             .skip_hidden(false)
-            .follow_links(false);
+            .follow_links(false)
+            .process_read_dir(|_depth, _path, _state, children| {
+                for child in children.iter_mut() {
+                    if let Ok(entry) = child {
+                        entry.client_state = entry_size_mtime(entry);
+                    }
+                }
+            });
 
         let root_files_start = file_count.load(Ordering::Relaxed);
         let root_dirs_start = dir_count.load(Ordering::Relaxed);
@@ -248,10 +319,7 @@ pub fn walk_directories(
             }
 
             let is_dir = entry.file_type().is_dir();
-            let (size, mtime) = entry
-                .metadata()
-                .map(|m| (m.len(), system_time_to_epoch(m.modified().unwrap_or(UNIX_EPOCH))))
-                .unwrap_or((0, 0));
+            let (size, mtime) = entry.client_state;
 
             let name = path
                 .file_name()

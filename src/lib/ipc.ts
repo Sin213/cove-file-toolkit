@@ -156,6 +156,12 @@ export async function detectIndexRoots(): Promise<DetectedRoot[]> {
   return invoke<DetectedRoot[]>("detect_index_roots");
 }
 
+// OS-appropriate default root (home dir). Race-proof fallback so the UI never
+// hardcodes a Linux path like "/home" on Windows/macOS.
+export async function defaultRoot(): Promise<string> {
+  return invoke<string>("default_root");
+}
+
 export async function search(
   query: string,
   filters: SearchFilters = {},

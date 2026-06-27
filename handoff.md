@@ -1,24 +1,32 @@
-# Handoff: Delete files feature + version bump to 1.2.4
+# Handoff: Windows compatibility + performance (4 commits)
 
 ## Summary
-Add ability to delete selected files from Search and Disk Usage views with confirmation prompts. Supports trash (Delete key, context menu) and permanent delete (Shift+Delete, context menu). Version bumped to 1.2.4.
+Cross-platform fixes and performance optimizations from Windows testing session. Removes hardcoded Linux paths, adds native trash on Windows/macOS, and gathers file metadata in jwalk's parallel read phase to avoid serial per-file handle opens (critical on Windows where Defender intercepts each `CreateFileW`).
+
+## Commits reviewed
+- `901126c` fix: use native trash crate on Windows/macOS, keep Linux fallback
+- `8dfef47` fix: remove hardcoded /home fallback that broke Windows
+- `be6d87d` perf: avoid per-file handle opens on Windows; fix corner resize + treemap labels
+- `4ce64cf` perf: gather file metadata during jwalk's parallel read phase
 
 ## Changes
 
 ### Backend (Rust)
-- `src-tauri/src/ipc.rs`: Added `delete_permanently` command (handles files and directories). Added `freedesktop_trash_fallback` for Linux trash (bypasses `trash` crate due to mount-point detection issues). Added `format_trash_date` helper. Added cross-device rename fallback (copy+delete on EXDEV). Changed `move_to_trash` to use manual fallback on Linux.
-- `src-tauri/src/main.rs`: Registered `delete_permanently` command.
-- `src-tauri/Cargo.toml`: Version bump to 1.2.4.
-- `src-tauri/Cargo.lock`: Updated lockfile for version bump.
-- `src-tauri/tauri.conf.json`: Version bump to 1.2.4.
+- `src-tauri/src/ipc.rs`: Added `default_root()` IPC command returning the user's home directory (via `dirs::home_dir()`). Split `move_to_trash` into platform-conditional versions: Linux keeps the custom freedesktop fallback, Windows/macOS uses the `trash` crate's native API. Added `#[cfg]` guards on `freedesktop_trash_fallback` and `format_trash_date` (Linux-only).
+- `src-tauri/src/main.rs`: Registered `default_root` command.
+- `src-tauri/src/walker.rs`: Added `entry_size_mtime()` to gather (size, mtime) from dir entries. On Windows uses `GetFileAttributesExW` (no file handle opened, avoids Defender overhead). Non-Windows falls back to `metadata()` (lstat). Updated `walk_directories` to use `WalkDirGeneric::<((), (u64, i64))>` with `process_read_dir` gathering metadata in parallel. Consumer loop now reads `entry.client_state` instead of calling `metadata()`.
+- `src-tauri/src/diskusage.rs`: Same parallel metadata pattern as walker.rs. `process_read_dir` now calls `entry_size_mtime()` for files and prunes excluded dirs. Consumer loop reads `entry.client_state` instead of per-file `metadata()`.
 
 ### Frontend
-- `src/lib/ipc.ts`: Added `deletePermanently()` wrapper.
-- `src/views/Search.svelte`: Added ConfirmDialog import, confirmDialog state, `handleTrash`/`handleDeletePermanently`/`getSelectedPaths` functions, Delete/Shift+Delete keyboard handler in `onKey`, trash + permanent delete context menu items, ConfirmDialog template.
-- `src/views/DiskUsage.svelte`: Added `deletePermanently` import, `handleDeletePermanently` function, permanent delete context menu item, `svelte:window` keyboard handler for Delete/Shift+Delete.
-- `package.json`: Version bump to 1.2.4.
+- `src/App.svelte`: Added `defaultRoot` import from ipc. Resolves `homeRoot` on mount via `defaultRoot()`. Changed fallback from hardcoded `"/home"` to `homeRoot`. Widened corner resize handles from 4px to 6px, increased edge offsets from 8px to 16px.
+- `src/views/Search.svelte`: Added `defaultRoot` import. Changed root fallback from hardcoded `"/home"` to async `defaultRoot()` call.
+- `src/lib/ipc.ts`: Added `defaultRoot()` Tauri invoke wrapper.
+- `src/views/DiskUsage.svelte`: Minor label adjustments (treemap).
+- `src/lib/components/Treemap.svelte`: Label rendering adjustments.
 
 ## Verification
-- `cargo check -p cove-file-toolkit`: pass
-- `npx vite build`: pass
-- Manual testing: trash works, permanent delete works, confirmation dialogs appear, keyboard shortcuts work
+- `cargo build`: pass (Linux cross-compile; Windows-specific code behind `#[cfg(windows)]`)
+- `cargo clippy --all-targets`: warnings only (all pre-existing, none from new code)
+- `cargo test`: 33 passed, 0 failed
+- `svelte-check`: 4 errors (all pre-existing type issues unrelated to these changes)
+- `.gitignore`: added pnpm-lock.yaml and pnpm-workspace.yaml entries

@@ -583,6 +583,16 @@ pub async fn detect_index_roots() -> Result<Vec<roots::DetectedRoot>, String> {
     Ok(roots::detect_drives())
 }
 
+/// OS-appropriate default root (the user's home directory). Used by the
+/// frontend as a race-proof fallback so it never hardcodes a Linux path
+/// like "/home" on Windows/macOS.
+#[command]
+pub async fn default_root() -> String {
+    dirs::home_dir()
+        .map(|h| h.to_string_lossy().to_string())
+        .unwrap_or_else(|| if cfg!(windows) { "C:\\".to_string() } else { "/".to_string() })
+}
+
 // ---------- Disk usage ----------
 
 #[command]
@@ -1186,6 +1196,9 @@ pub async fn rescan_disk_dir(
 
 // ---------- File operations (Disk Usage context menu) ----------
 
+// Linux: the `trash` crate had mount-point detection issues, so use a custom
+// freedesktop trash implementation. This path is unchanged from prior releases.
+#[cfg(target_os = "linux")]
 #[command]
 pub async fn move_to_trash(paths: Vec<String>) -> Result<(), String> {
     for p in &paths {
@@ -1195,6 +1208,16 @@ pub async fn move_to_trash(paths: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+// Windows/macOS: the `trash` crate calls the native Shell API (Windows Recycle
+// Bin / macOS Trash) and works without the mount-point issues seen on Linux.
+#[cfg(not(target_os = "linux"))]
+#[command]
+pub async fn move_to_trash(paths: Vec<String>) -> Result<(), String> {
+    trash::delete_all(&paths).map_err(|e| format!("Trash failed: {}", e))?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn freedesktop_trash_fallback(path: &Path) -> Result<(), String> {
     let trash_dir = dirs::data_dir()
         .ok_or("Cannot determine XDG data directory")?
@@ -1256,6 +1279,7 @@ fn freedesktop_trash_fallback(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn format_trash_date() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()

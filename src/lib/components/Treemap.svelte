@@ -198,8 +198,8 @@
 <div class="treemap-wrap" bind:this={containerEl} style:height="{height}px">
   {#each tiles as tile (tile.entry.path)}
     {@const r = tile.rect}
-    {@const showText = r.w >= 60 && r.h >= 22}
-    {@const showSize = r.w >= 80 && r.h >= 36}
+    {@const showText = r.w >= 40 && r.h >= 15}
+    {@const showSize = r.w >= 64 && r.h >= 30}
     <button
       class="tm-tile"
       class:selected={selectedPath === tile.entry.path}

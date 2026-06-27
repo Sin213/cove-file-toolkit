@@ -15,6 +15,7 @@
     removeIndexRoot,
     updateIndexRootEnabled,
     detectIndexRoots,
+    defaultRoot,
     type FileItem,
     type SearchFilters,
     type AppSettings,
@@ -286,7 +287,17 @@
       // without a Settings detour. Only kicks in when nothing is configured
       // — we no longer silently fall back when the user has explicitly
       // configured roots and disabled them.
-      const home = (settings?.default_root || "/home").trim();
+      // Prefer the loaded setting; fall back to the backend's OS-correct home
+      // (never a hardcoded "/home", which doesn't exist on Windows/macOS and
+      // would otherwise be registered as a broken index root).
+      let home = (settings?.default_root || "").trim();
+      if (!home) {
+        try {
+          home = (await defaultRoot()).trim();
+        } catch {
+          home = "";
+        }
+      }
       if (!home) {
         idx.status = "error";
         idx.error =

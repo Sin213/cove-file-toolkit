@@ -55,3 +55,6 @@ AGENTS.md
 
 # Session aids (orientation snapshots)
 *-orientation.md
+
+# Local portable test build (not versioned)
+portable-build/

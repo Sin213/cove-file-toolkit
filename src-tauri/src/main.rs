@@ -143,6 +143,7 @@ fn main() {
             ipc::remove_index_root,
             ipc::update_index_root_enabled,
             ipc::detect_index_roots,
+            ipc::default_root,
             ipc::scan_disk_usage,
             ipc::cancel_disk_usage_scan,
             ipc::get_disk_usage_scan_state,

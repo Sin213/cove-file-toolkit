@@ -16,6 +16,7 @@
     getIndexStats,
     getIndexRoots,
     getIndexScanState,
+    defaultRoot,
     type AppSettings,
     type CacheInfo,
   } from "./lib/ipc";
@@ -39,6 +40,8 @@
   let activeTab = $state<TabId>("search");
   let showSettings = $state(false);
   let settings = $state<AppSettings | null>(null);
+  // OS-correct fallback root (home dir), resolved from the backend on startup.
+  let homeRoot = $state("");
   let cacheInfo = $state<CacheInfo | null>(null);
   let isMaximized = $state(false);
   let appVersion = $state("");
@@ -269,6 +272,12 @@
 
   onMount(async () => {
     appVersion = await getVersion();
+    // Resolve the OS-correct default root (home dir) for use as a fallback.
+    try {
+      homeRoot = await defaultRoot();
+    } catch {
+      homeRoot = "";
+    }
     // 1. Subscribe to backend events ONCE — survives tab switches.
     await initScanListeners();
     // 2. Load settings + cache info.
@@ -458,7 +467,7 @@
     {:else if activeTab === "disk"}
       <DiskUsage
         {sendToRename}
-        defaultRoot={settings?.default_root ?? "/home"}
+        defaultRoot={settings?.default_root ?? homeRoot}
         refreshSignal={globalShortcut === "refresh"}
       />
     {:else}
@@ -685,61 +694,67 @@
     pointer-events: auto;
     background: transparent;
   }
+  /* Corners are larger than edges and painted last (later in the DOM) so they
+     win hit-testing where they meet the edges. */
   .rz-n {
     top: 0;
-    left: 8px;
-    right: 8px;
-    height: 4px;
+    left: 16px;
+    right: 16px;
+    height: 6px;
     cursor: ns-resize;
   }
   .rz-s {
     bottom: 0;
-    left: 8px;
-    right: 8px;
-    height: 4px;
+    left: 16px;
+    right: 16px;
+    height: 6px;
     cursor: ns-resize;
   }
   .rz-w {
-    top: 8px;
-    bottom: 8px;
+    top: 16px;
+    bottom: 16px;
     left: 0;
-    width: 4px;
+    width: 6px;
     cursor: ew-resize;
   }
   .rz-e {
-    top: 8px;
-    bottom: 8px;
+    top: 16px;
+    bottom: 16px;
     right: 0;
-    width: 4px;
+    width: 6px;
     cursor: ew-resize;
   }
   .rz-nw {
     top: 0;
     left: 0;
-    width: 8px;
-    height: 8px;
+    width: 16px;
+    height: 16px;
     cursor: nwse-resize;
+    z-index: 101;
   }
   .rz-ne {
     top: 0;
     right: 0;
-    width: 8px;
-    height: 8px;
+    width: 16px;
+    height: 16px;
     cursor: nesw-resize;
+    z-index: 101;
   }
   .rz-sw {
     bottom: 0;
     left: 0;
-    width: 8px;
-    height: 8px;
+    width: 16px;
+    height: 16px;
     cursor: nesw-resize;
+    z-index: 101;
   }
   .rz-se {
     bottom: 0;
     right: 0;
-    width: 8px;
-    height: 8px;
+    width: 16px;
+    height: 16px;
     cursor: nwse-resize;
+    z-index: 101;
   }
 
   .tray-toast {

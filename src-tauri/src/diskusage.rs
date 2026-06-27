@@ -456,30 +456,36 @@ where
     // global allocator + dentry cache lock starts to outweigh the gain.
     let parallel_threads = std::cmp::min(num_cpus::get(), 8);
     let excluded_for_prune: Vec<String> = excluded.to_vec();
-    let walker = jwalk::WalkDir::new(&canonical)
+    let walker = jwalk::WalkDirGeneric::<((), (u64, i64))>::new(&canonical)
         .parallelism(jwalk::Parallelism::RayonNewPool(parallel_threads))
         .skip_hidden(false)
         .follow_links(false)
-        // Prune excluded subtrees at descend time. Without this, jwalk
-        // would still recurse into e.g. `node_modules/` and pay the cost
-        // of millions of metadata reads only to have the consumer drop
-        // every entry. Setting `read_children_path = None` on a directory
-        // entry tells jwalk not to recurse into it.
+        // Two jobs, both done in jwalk's PARALLEL read phase:
+        //  1. Prune excluded subtrees at descend time. Without this, jwalk
+        //     would still recurse into e.g. `node_modules/` and pay the cost
+        //     of millions of metadata reads only to have the consumer drop
+        //     every entry. Setting `read_children_path = None` on a directory
+        //     entry tells jwalk not to recurse into it.
+        //  2. Gather each file's (size, mtime) into client_state here so the
+        //     consumer loop doesn't pay the per-file metadata syscall (a
+        //     `GetFileAttributesExW` on Windows) serially. Dirs are skipped —
+        //     their size isn't needed.
         .process_read_dir(move |_depth, _path, _state, children| {
-            if excluded_for_prune.is_empty() {
-                return;
-            }
             for child in children.iter_mut() {
                 if let Ok(entry) = child {
                     if entry.file_type().is_dir() {
-                        let name_os = entry.file_name();
-                        let name = name_os.to_string_lossy();
-                        if excluded_for_prune
-                            .iter()
-                            .any(|ex| name.as_ref() == ex.as_str())
-                        {
-                            entry.read_children_path = None;
+                        if !excluded_for_prune.is_empty() {
+                            let name_os = entry.file_name();
+                            let name = name_os.to_string_lossy();
+                            if excluded_for_prune
+                                .iter()
+                                .any(|ex| name.as_ref() == ex.as_str())
+                            {
+                                entry.read_children_path = None;
+                            }
                         }
+                    } else {
+                        entry.client_state = crate::walker::entry_size_mtime(entry);
                     }
                 }
             }
@@ -571,16 +577,10 @@ where
             path_to_id.insert(path_str, new_id);
             dirs[parent_id as usize].subdir_ids.push(new_id);
         } else {
-            // File: only stat files (skip stat on dirs entirely — we don't
-            // need their size). This is a meaningful win on dir-heavy trees.
-            let metadata = entry.metadata().ok();
-            let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-            let mtime = metadata
-                .as_ref()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
+            // File (size, mtime) was gathered in parallel during the walk's
+            // read phase (see process_read_dir above) and stored in
+            // client_state — no per-file metadata syscall here.
+            let (size, mtime) = entry.client_state;
 
             file_count += 1;
             byte_count += size;
