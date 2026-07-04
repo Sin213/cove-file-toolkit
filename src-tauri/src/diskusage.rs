@@ -466,10 +466,13 @@ where
         //     of millions of metadata reads only to have the consumer drop
         //     every entry. Setting `read_children_path = None` on a directory
         //     entry tells jwalk not to recurse into it.
-        //  2. Gather each file's (size, mtime) into client_state here so the
-        //     consumer loop doesn't pay the per-file metadata syscall (a
-        //     `GetFileAttributesExW` on Windows) serially. Dirs are skipped —
-        //     their size isn't needed.
+        //  2. Gather each regular file's (size, mtime) into client_state here
+        //     so the consumer loop doesn't pay the per-file metadata syscall
+        //     (a `GetFileAttributesExW` on Windows) serially. Dirs are skipped
+        //     (their size isn't needed) and so are symlinks/fifos/sockets/
+        //     devices - the consumer drops those anyway, and stat-ing them on
+        //     a jwalk worker can block the whole walk (e.g. an entry under a
+        //     dead FUSE/NFS mount).
         .process_read_dir(move |_depth, _path, _state, children| {
             for child in children.iter_mut() {
                 if let Ok(entry) = child {
@@ -484,7 +487,9 @@ where
                                 entry.read_children_path = None;
                             }
                         }
-                    } else {
+                    } else if entry.file_type().is_file() {
+                        // Regular files only. Non-file specials keep the
+                        // (0, 0) default; the consumer loop skips them.
                         entry.client_state = crate::walker::entry_size_mtime(entry);
                     }
                 }
@@ -982,6 +987,64 @@ mod tests {
         (
             canon_ms, walk_ms, agg_ms, total_ms, file_count, dir_count, total_bytes,
         )
+    }
+
+    /// Regression test for the Linux "Scanning..." hang: the parallel read
+    /// phase must not stat non-file special entries (see the
+    /// `process_read_dir` closure in `scan_disk_usage_inner`). Builds a temp
+    /// tree with a normal file, a subdir, a dangling symlink, and a fifo,
+    /// then proves the scan completes and specials are skipped, not counted.
+    /// The scan runs on a worker thread with a recv_timeout guard so a hang
+    /// fails the test instead of wedging the suite.
+    #[test]
+    #[cfg(unix)]
+    fn scan_skips_special_entries_and_completes() {
+        use std::sync::mpsc;
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        let root = std::env::temp_dir().join(format!(
+            "cove-du-special-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).expect("create temp root");
+        std::fs::write(root.join("normal.txt"), b"hello").expect("write file");
+        let sub = root.join("subdir");
+        std::fs::create_dir(&sub).expect("create subdir");
+        std::fs::write(sub.join("inner.bin"), vec![0u8; 128]).expect("write inner");
+        std::os::unix::fs::symlink(root.join("does-not-exist"), root.join("dangling"))
+            .expect("create dangling symlink");
+        let fifo_c = std::ffi::CString::new(root.join("pipe.fifo").to_string_lossy().as_bytes())
+            .expect("fifo path");
+        let fifo_created = unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o644) } == 0;
+
+        let (tx, rx) = mpsc::channel();
+        let root_str = root.to_string_lossy().to_string();
+        std::thread::spawn(move || {
+            let token = CancellationToken::new();
+            let _ = tx.send(scan_disk_usage_inner(&root_str, token, &[], |_| {}));
+        });
+        // 30s is generous for a five-entry tree; a hang here is exactly the
+        // regression this test protects against.
+        let result = rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("scan hung on special entries");
+        let (_tree, summary, _timings) = result.expect("scan failed");
+
+        assert_eq!(summary.total_files, 2, "only regular files counted");
+        assert_eq!(summary.total_dirs, 2, "root + subdir");
+        assert_eq!(summary.total_size, 5 + 128, "bytes from regular files only");
+        let expected_skipped = 1 + u64::from(fifo_created);
+        assert_eq!(
+            summary.skipped, expected_skipped,
+            "dangling symlink (+ fifo when supported) skipped"
+        );
+        assert_eq!(summary.errors, 0, "specials must not surface as errors");
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// Compare legacy vs. current implementation on the same path. Run with:
