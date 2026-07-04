@@ -280,6 +280,12 @@
     }
   }
 
+  // Surface open/reveal failures (stale index path, missing drive, launcher
+  // error) through the existing error dialog instead of a silent no-op.
+  function showOpenError(e: unknown) {
+    confirmDialog = { title: "Error", message: String(e), confirmLabel: "OK", danger: false, onConfirm: () => { confirmDialog = null; } };
+  }
+
   function handleRenameStart(path: string) {
     const name = path.split(/[/\\]/).pop() || "";
     renameModal = { path, currentName: name, newName: name, error: "" };
@@ -365,11 +371,11 @@
         : []),
       {
         label: isDir ? "Open folder" : "Open file",
-        action: () => openPath(path).catch(() => {}),
+        action: () => openPath(path).catch(showOpenError),
       },
       {
         label: "Open containing folder",
-        action: () => revealInFolder(path).catch(() => {}),
+        action: () => revealInFolder(path).catch(showOpenError),
       },
       { separator: true } as any,
       {

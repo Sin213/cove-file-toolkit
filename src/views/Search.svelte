@@ -611,7 +611,16 @@
       },
       {
         label: "Open containing folder",
-        action: () => revealInFolder(item.path).catch(() => {}),
+        action: () =>
+          revealInFolder(item.path).catch((e) => {
+            const msg = `${e}`;
+            console.error("[search:reveal] failed", item.path, msg);
+            openError = `Could not open containing folder: ${item.path}\n${msg}`;
+            if (openErrorTimer) clearTimeout(openErrorTimer);
+            openErrorTimer = setTimeout(() => {
+              openError = "";
+            }, 8000);
+          }),
       },
       { separator: true } as any,
       {
