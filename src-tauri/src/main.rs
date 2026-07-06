@@ -11,6 +11,7 @@ mod roots;
 mod search;
 mod settings;
 mod state;
+mod updater;
 mod walker;
 
 use std::sync::atomic::Ordering;
@@ -164,6 +165,8 @@ fn main() {
             ipc::rename_path,
             ipc::copy_paths,
             ipc::move_paths,
+            updater::updater_check,
+            updater::updater_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

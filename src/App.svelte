@@ -17,9 +17,11 @@
     getIndexRoots,
     getIndexScanState,
     defaultRoot,
+    openPath,
     type AppSettings,
     type CacheInfo,
   } from "./lib/ipc";
+  import { invoke } from "@tauri-apps/api/core";
   import {
     initScanListeners,
     refreshIndexStats,
@@ -52,6 +54,45 @@
 
   // One-time per-session toast hint when the X button hides to tray, so the
   // first close doesn't feel like a freeze. Shown once per app launch.
+  // In-app update banner. updater_check returns null when up to date.
+  type UpdateInfo = {
+    latest_version: string;
+    release_url: string;
+    asset_name: string | null;
+    asset_url: string | null;
+    sha256_url: string | null;
+    can_auto_install: boolean;
+  };
+  let updateInfo = $state<UpdateInfo | null>(null);
+  let updateBusy = $state(false);
+  let updateError = $state("");
+
+  async function checkForUpdate() {
+    try {
+      updateInfo = await invoke<UpdateInfo | null>("updater_check");
+    } catch {
+      // Network failures and rate limits are fine; try again next launch.
+    }
+  }
+
+  async function installUpdate() {
+    if (!updateInfo?.can_auto_install) return;
+    updateBusy = true;
+    updateError = "";
+    try {
+      // Downloads, verifies the .sha256 sidecar, installs under the new
+      // versioned filename, relaunches, and exits this instance.
+      await invoke("updater_install", {
+        assetName: updateInfo.asset_name,
+        assetUrl: updateInfo.asset_url,
+        sha256Url: updateInfo.sha256_url,
+      });
+    } catch (e) {
+      updateError = String(e);
+      updateBusy = false;
+    }
+  }
+
   let trayHintVisible = $state(false);
   let trayHintShown = false;
   let trayHintTimer: ReturnType<typeof setTimeout> | null = null;
@@ -315,6 +356,8 @@
     } catch (e) {
       console.warn("[cove] could not subscribe to close-to-tray event:", e);
     }
+    // Update check after startup work has settled; never blocks boot.
+    setTimeout(() => void checkForUpdate(), 4000);
     try {
       const unlistenResize = await getCurrentWindow().onResized(() =>
         refreshMaxState(),
@@ -489,6 +532,24 @@
   <div class="tray-toast" role="status" aria-live="polite">
     <span>Cove Toolkit is still running in the tray. Right-click the tray icon to quit, or toggle this off in Settings.</span>
     <button class="tt-x" aria-label="Dismiss" onclick={() => (trayHintVisible = false)}>×</button>
+  </div>
+{/if}
+
+{#if updateInfo}
+  <div class="tray-toast update-toast" role="status" aria-live="polite">
+    <span>
+      Cove Toolkit v{updateInfo.latest_version} is available (you have v{appVersion}).
+      {#if updateError}<br />Update failed: {updateError}{/if}
+    </span>
+    {#if updateInfo.can_auto_install}
+      <button class="ut-btn" disabled={updateBusy} onclick={installUpdate}>
+        {updateBusy ? "Updating…" : "Update now"}
+      </button>
+    {/if}
+    <button class="ut-btn" disabled={updateBusy} onclick={() => openPath(updateInfo!.release_url)}>
+      View release
+    </button>
+    <button class="tt-x" aria-label="Dismiss" disabled={updateBusy} onclick={() => (updateInfo = null)}>×</button>
   </div>
 {/if}
 
@@ -788,5 +849,25 @@
   .tray-toast .tt-x:hover {
     color: var(--text);
     background: var(--bg-hover);
+  }
+  .update-toast {
+    align-items: center;
+  }
+  .update-toast .ut-btn {
+    background: var(--bg-hover);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .update-toast .ut-btn:hover:not(:disabled) {
+    border-color: var(--accent, var(--text-muted));
+  }
+  .update-toast .ut-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
 </style>
