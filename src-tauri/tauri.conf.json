@@ -1,6 +1,6 @@
 {
   "productName": "Cove Toolkit",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "identifier": "com.cove.file-toolkit",
   "build": {
     "frontendDist": "../dist",
