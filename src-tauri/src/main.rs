@@ -17,6 +17,11 @@ mod walker;
 use std::sync::atomic::Ordering;
 
 fn main() {
+    // WebKitGTK's accelerated compositor can produce a blank window on some
+    // Linux GPU/driver combinations (notably when GBM buffer creation fails).
+    #[cfg(target_os = "linux")]
+    std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+
     let app_state = state::new_app_state();
     let close_to_tray_flag = app_state.close_to_tray.clone();
     let tray_available_flag = app_state.tray_available.clone();

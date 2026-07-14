@@ -1040,7 +1040,10 @@ pub async fn open_path(path: String) -> Result<(), String> {
         ),
         Err(_) => eprintln!("[open_path] opening exact={path:?}"),
     }
-    let r = spawn_open(&path);
+    let open_target = path.clone();
+    let r = tokio::task::spawn_blocking(move || spawn_open(&open_target))
+        .await
+        .map_err(|e| format!("desktop opener task failed: {e}"))?;
     match &r {
         Ok(()) => eprintln!("[open_path] spawn ok for {path:?}"),
         Err(e) => eprintln!("[open_path] spawn err for {path:?}: {e}"),
@@ -1068,7 +1071,9 @@ pub async fn reveal_in_folder(path: String) -> Result<(), String> {
         .map(|c| c.to_string_lossy().to_string())
         .unwrap_or_else(|_| target.clone());
     eprintln!("[reveal_in_folder] opening canonical={canonical:?} (input={path:?})");
-    let r = spawn_open(&canonical);
+    let r = tokio::task::spawn_blocking(move || spawn_open(&canonical))
+        .await
+        .map_err(|e| format!("desktop opener task failed: {e}"))?;
     if let Err(e) = &r {
         eprintln!("[reveal_in_folder] spawn err: {e}");
     }
@@ -1098,20 +1103,134 @@ fn spawn_open(target: &str) -> Result<(), String> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
-    // AppImage sets LD_LIBRARY_PATH, LD_PRELOAD, etc. that break child
-    // processes like xdg-open / file managers. Restore the original env
-    // so the spawned process inherits a clean environment.
-    for key in ["LD_LIBRARY_PATH", "LD_PRELOAD", "GDK_PIXBUF_MODULE_FILE",
-                "GDK_PIXBUF_MODULEDIR", "PYTHONPATH"] {
-        if let Ok(orig) = std::env::var(format!("APPIMAGE_ORIGINAL_{key}")) {
-            cmd.env(key, orig);
-        } else if std::env::var("APPIMAGE").is_ok() {
+    clean_appimage_env(&mut cmd);
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("xdg-open failed for {target:?}: {e}"))?;
+    wait_for_linux_launcher(child, target)
+}
+
+#[cfg(target_os = "linux")]
+fn clean_appimage_env(cmd: &mut std::process::Command) {
+    if std::env::var_os("APPIMAGE").is_none() {
+        return;
+    }
+
+    for key in [
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "PYTHONPATH",
+        "GTK_DATA_PREFIX",
+        "GTK_THEME",
+        "GDK_BACKEND",
+        "GSETTINGS_SCHEMA_DIR",
+        "GTK_EXE_PREFIX",
+        "GTK_IM_MODULE_FILE",
+        "GDK_PIXBUF_MODULE_FILE",
+        "GDK_PIXBUF_MODULEDIR",
+        "GIO_EXTRA_MODULES",
+    ] {
+        restore_or_remove_env(cmd, key);
+    }
+
+    let appdir = std::env::var_os("APPDIR").map(std::path::PathBuf::from);
+    for key in ["XDG_DATA_DIRS", "GTK_PATH"] {
+        let original_key = format!("APPIMAGE_ORIGINAL_{key}");
+        if let Some(original) = std::env::var_os(original_key) {
+            cmd.env(key, original);
+        } else if let (Some(value), Some(appdir)) = (std::env::var_os(key), appdir.as_deref()) {
+            match without_appdir_paths(&value, appdir) {
+                Some(clean) if !clean.is_empty() => {
+                    cmd.env(key, clean);
+                }
+                _ => {
+                    cmd.env_remove(key);
+                }
+            }
+        } else {
             cmd.env_remove(key);
         }
     }
-    cmd.spawn()
-        .map(|_| ())
-        .map_err(|e| format!("xdg-open failed for {target:?}: {e}"))
+
+    for key in ["APPIMAGE", "APPDIR", "APPIMAGE_GTK_THEME"] {
+        cmd.env_remove(key);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn restore_or_remove_env(cmd: &mut std::process::Command, key: &str) {
+    if let Some(original) = std::env::var_os(format!("APPIMAGE_ORIGINAL_{key}")) {
+        cmd.env(key, original);
+    } else {
+        cmd.env_remove(key);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn without_appdir_paths(
+    value: &std::ffi::OsStr,
+    appdir: &std::path::Path,
+) -> Option<std::ffi::OsString> {
+    std::env::join_paths(std::env::split_paths(value).filter(|entry| !entry.starts_with(appdir)))
+        .ok()
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_linux_launcher(mut child: std::process::Child, target: &str) -> Result<(), String> {
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_millis(750);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                return Err(format!("xdg-open failed for {target:?} with {status}"));
+            }
+            Err(e) => return Err(format!("could not monitor xdg-open for {target:?}: {e}")),
+            Ok(None) if Instant::now() >= deadline => {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Ok(());
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_open_tests {
+    use super::{wait_for_linux_launcher, without_appdir_paths};
+    use std::ffi::OsStr;
+    use std::path::Path;
+    use std::process::Command;
+
+    #[test]
+    fn removes_only_appimage_entries_from_search_paths() {
+        let clean = without_appdir_paths(
+            OsStr::new("/tmp/.mount_Cove/usr/share:/usr/share:/home/user/.local/share"),
+            Path::new("/tmp/.mount_Cove"),
+        )
+        .unwrap();
+
+        assert_eq!(clean, OsStr::new("/usr/share:/home/user/.local/share"));
+    }
+
+    #[test]
+    fn reports_an_immediate_launcher_failure() {
+        let child = Command::new("sh").args(["-c", "exit 17"]).spawn().unwrap();
+
+        let error = wait_for_linux_launcher(child, "/tmp/example").unwrap_err();
+        assert!(error.contains("exit status: 17"), "{error}");
+    }
+
+    #[test]
+    fn accepts_a_successful_launcher_handoff() {
+        let child = Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
+
+        assert!(wait_for_linux_launcher(child, "/tmp/example").is_ok());
+    }
 }
 
 #[cfg(target_os = "macos")]
