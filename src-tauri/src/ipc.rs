@@ -1019,6 +1019,18 @@ pub async fn clear_cache(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Sink for the webview's own diagnostics.
+///
+/// The devtools console is unreachable in a packaged build started from a
+/// desktop launcher, so the UI forwards its log lines here and they land in the
+/// same file as the backend's — which is the only way to tell "the handler never
+/// fired" apart from "the command never arrived".
+#[command]
+pub async fn log_frontend(source: String, message: String) -> Result<(), String> {
+    crate::logging::log_line(&format!("ui:{source}"), &message);
+    Ok(())
+}
+
 #[command]
 pub async fn open_path(path: String) -> Result<(), String> {
     eprintln!("[open_path] requested {path:?}");

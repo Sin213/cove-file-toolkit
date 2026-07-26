@@ -16,6 +16,7 @@
     updateIndexRootEnabled,
     detectIndexRoots,
     defaultRoot,
+    logToFile,
     type FileItem,
     type SearchFilters,
     type AppSettings,
@@ -216,6 +217,12 @@
       root_id: item.root_id,
       root_path: item.root_path,
     });
+    // Same line to the log file: the console is unreadable in a packaged build,
+    // and this marks that the activation handler itself ran at all.
+    logToFile(
+      "search:activate",
+      `${item.is_dir ? "dir" : "file"} ${fullPath} (root=${item.root_id})`,
+    );
     try {
       await openPath(fullPath);
       // Clear any stale error from a previous failure.

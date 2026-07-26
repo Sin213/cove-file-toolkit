@@ -1,6 +1,6 @@
 [package]
 name = "cove-file-toolkit"
-version = "1.2.7"
+version = "1.2.8"
 description = "Cove Toolkit — fast file search, disk usage, and bulk rename"
 edition = "2021"
 

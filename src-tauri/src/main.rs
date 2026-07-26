@@ -5,6 +5,7 @@ mod diskusage;
 mod index;
 mod ipc;
 mod jobs;
+mod logging;
 mod portable;
 mod rename;
 mod roots;
@@ -17,6 +18,10 @@ mod walker;
 use std::sync::atomic::Ordering;
 
 fn main() {
+    // Before anything else: desktop launchers (Cove Nexus) hand children a
+    // /dev/null stderr, so without this every diagnostic below is lost.
+    logging::init();
+
     // WebKitGTK's accelerated compositor can produce a blank window on some
     // Linux GPU/driver combinations (notably when GBM buffer creation fails).
     #[cfg(target_os = "linux")]
@@ -164,6 +169,7 @@ fn main() {
             ipc::clear_cache,
             ipc::open_path,
             ipc::reveal_in_folder,
+            ipc::log_frontend,
             ipc::rescan_disk_dir,
             ipc::move_to_trash,
             ipc::delete_permanently,

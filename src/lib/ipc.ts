@@ -435,12 +435,39 @@ export async function movePaths(srcs: string[], destDir: string): Promise<void> 
   return invoke<void>("move_paths", { srcs, destDir });
 }
 
+// Forward a line to the backend log file. Deliberately NOT awaited by callers:
+// if the IPC channel itself is the thing misbehaving, waiting on a log call
+// would stall the very operation we are trying to observe. Failures are
+// swallowed — diagnostics must never be able to break the UI.
+export function logToFile(source: string, message: string): void {
+  invoke<void>("log_frontend", { source, message }).catch(() => {});
+}
+
+// openPath/revealInFolder are instrumented at the wrapper so every caller
+// (double-click, Enter, context menu, Disk Usage) is covered by one edit. The
+// three outcomes are distinguishable in the log: a "dispatch" with no matching
+// "resolved"/"rejected" means the command never came back, while no "dispatch"
+// at all means the UI handler never ran.
 export async function openPath(path: string): Promise<void> {
-  return invoke<void>("open_path", { path });
+  logToFile("openPath", `dispatch ${path}`);
+  try {
+    await invoke<void>("open_path", { path });
+    logToFile("openPath", `resolved ${path}`);
+  } catch (e) {
+    logToFile("openPath", `rejected ${path}: ${e}`);
+    throw e;
+  }
 }
 
 export async function revealInFolder(path: string): Promise<void> {
-  return invoke<void>("reveal_in_folder", { path });
+  logToFile("revealInFolder", `dispatch ${path}`);
+  try {
+    await invoke<void>("reveal_in_folder", { path });
+    logToFile("revealInFolder", `resolved ${path}`);
+  } catch (e) {
+    logToFile("revealInFolder", `rejected ${path}: ${e}`);
+    throw e;
+  }
 }
 
 // helpers
